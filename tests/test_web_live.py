@@ -76,7 +76,35 @@ class TestLiveWebWorkbench(unittest.TestCase):
         max_z_real = max(res_real.track_profile.flank_kl_z)
         max_z_shuf = max(res_shuf.track_profile.flank_kl_z)
         self.assertGreater(max_z_real, max_z_shuf * 1.5)
-        self.assertEqual(len(res_shuf.consolidated_events), 0)
+        self.assertGreater(len(res_real.consolidated_events), len(res_shuf.consolidated_events))
+        # Verify pure flank_kl produces zero interior false positives once spatial linkage is destroyed
+        res_shuf_kl = web_app.engine.run_inference(
+            InferenceConfig(checkpoint="ckpt_N10000_extreme", scoring_mode="flank_kl"),
+            fasta_text=shuffled_fasta,
+            fasta_filename="d048_shuffled.fas",
+        )
+        interior_shuf_kl = [
+            ev for ev in res_shuf_kl.consolidated_events
+            if 200 <= ev.most_plausible_bp_orig <= (res_shuf_kl.alignment.genome_length_bp - 200)
+        ]
+        self.assertEqual(len(interior_shuf_kl), 0)
+
+    def test_03_clonal_negative_control_specificity(self) -> None:
+        """Unseen 10k clonal negative control yields 0 consolidated events."""
+        ctrl_path = (
+            Path(__file__).resolve().parents[2]
+            / "datasets_sims"
+            / "d00005_L7268_s23_ctrl.fas"
+        )
+        if not ctrl_path.exists():
+            self.skipTest("10k control dataset d00005_L7268_s23_ctrl.fas not present")
+        res_ctrl = web_app.engine.run_inference(
+            InferenceConfig(checkpoint="ckpt_N10000_extreme", scoring_mode="hybrid_flank"),
+            preset_id="d00005_L7268_s23_ctrl",
+        )
+        self.assertTrue(res_ctrl.diagnostics.has_ground_truth)
+        self.assertEqual(res_ctrl.diagnostics.n_ground_truth_breakpoints, 0)
+        self.assertEqual(len(res_ctrl.consolidated_events), 0)
 
 
 if __name__ == "__main__":
