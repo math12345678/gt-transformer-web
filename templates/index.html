@@ -1,0 +1,483 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>gt-transformer (RDP5 / OpenRDP Web Interface)</title>
+  <link rel="stylesheet" href="/static/css/styles.css?v=3" />
+</head>
+<body>
+  <!-- Classic RDP5-Style Desktop Toolbar -->
+  <header class="rdp-toolbar">
+    <div class="toolbar-buttons">
+      <button type="button" id="btnOpenFasta" class="tb-btn" title="Upload or paste FASTA alignment & ground truth">
+        Open
+      </button>
+      <div class="tb-sep"></div>
+      <button type="button" id="btnRunTop" class="tb-btn tb-btn-run" title="Run recombination detection">
+        Run
+      </button>
+      <button type="button" id="btnOptionsTop" class="tb-btn" title="Configure model and localiser options (.ini)">
+        Options
+      </button>
+      <div class="tb-sep"></div>
+      <button type="button" id="btnExportOpenRdpTsv" class="tb-btn" title="Export OpenRDP-style summary table (TSV)">
+        Save OpenRDP TSV
+      </button>
+      <button type="button" id="btnExportBpCsv" class="tb-btn" title="Export consolidated breakpoints CSV">
+        Save Breakpoints CSV
+      </button>
+      <button type="button" id="btnExportSeqCsv" class="tb-btn" title="Export sequence & parental calls CSV">
+        Save Sequence Calls
+      </button>
+      <a href="/api/timings/export.csv" class="tb-btn" title="Download stage-by-stage wall-clock timing CSV">
+        Timings CSV
+      </a>
+      <button type="button" id="btnExportJson" class="tb-btn" title="Export complete diagnostic JSON">
+        Save JSON
+      </button>
+    </div>
+
+    <div class="toolbar-dataset">
+      <label for="presetSelect" class="tb-lbl">Dataset:</label>
+      <select id="presetSelect" class="tb-select"></select>
+      <span id="engineStatusBadge" class="status-box">live · 570,881 params</span>
+    </div>
+  </header>
+
+  <!-- Full-Length Alignment & Informative-Site Overview Strip (like RDP5 top magenta track) -->
+  <div class="overview-strip-wrap">
+    <canvas id="overviewStripCanvas" width="1280" height="28"></canvas>
+  </div>
+
+  <!-- Classic RDP5 2x2 Desktop Split Workspace -->
+  <main class="rdp-grid">
+    <!-- PANE 1 (TOP-LEFT): Multiple Sequence Alignment Viewer -->
+    <section class="rdp-pane pane-alignment">
+      <div class="pane-header">
+        <span class="pane-title" id="alnPaneTitle">Sequence Alignment (0..110 bp)</span>
+        <div class="aln-nav-controls">
+          <button type="button" id="btnAlnPrevFast" class="mini-btn" title="Back 500 bp">&lt;&lt;</button>
+          <button type="button" id="btnAlnPrev" class="mini-btn" title="Back 80 bp">&lt;</button>
+          <label class="mini-lbl">Pos:</label>
+          <input type="number" id="alnJumpInput" class="mini-input" value="0" min="0" />
+          <button type="button" id="btnAlnGo" class="mini-btn">Go</button>
+          <button type="button" id="btnAlnNext" class="mini-btn" title="Forward 80 bp">&gt;</button>
+          <button type="button" id="btnAlnNextFast" class="mini-btn" title="Forward 500 bp">&gt;&gt;</button>
+          <button type="button" id="btnAlnToEvent" class="mini-btn" title="Jump to selected breakpoint">Jump to Event</button>
+        </div>
+      </div>
+
+      <div class="aln-viewer-body">
+        <div class="aln-matrix-scroll" id="alnMatrixContainer">
+          <div class="mono-muted" style="padding:12px;">Loading alignment...</div>
+        </div>
+        <div class="aln-seq-sidebar">
+          <div class="aln-seq-sidebar-head">
+            <button type="button" id="btnToggleCarriersOnly" class="mini-btn btn-full">Show All Sequences</button>
+          </div>
+          <div class="aln-seq-list" id="alnSeqList"></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- PANE 2 (TOP-RIGHT): Tabbed Events, Diagnostics, Timings & 10k Validation -->
+    <section class="rdp-pane pane-inspector">
+      <div class="rdp-tabs" role="tablist">
+        <button type="button" class="rdp-tab active" data-tab="tab-overview">Overview</button>
+        <button type="button" class="rdp-tab" data-tab="tab-parents">Matrices / Parents</button>
+        <button type="button" class="rdp-tab" data-tab="tab-diagnostics">TP / FP / FN</button>
+        <button type="button" class="rdp-tab" data-tab="tab-timings">Timings</button>
+        <button type="button" class="rdp-tab" data-tab="tab-benchmarks">10k Validation</button>
+        <button type="button" class="rdp-tab" data-tab="tab-notes">Notes (<span id="annotationCountBadge">0</span>)</button>
+      </div>
+
+      <div class="pane-tab-body">
+        <!-- TAB: Overview (OpenRDP + RDP5 Event Summary Table + Run Summary Strip) -->
+        <div id="tab-overview" class="tab-content">
+          <div class="summary-bar" id="runSummaryBar">
+            <span><strong>Align:</strong> <span id="sumDimensions">—</span></span>
+            <span><strong>Cols:</strong> <span id="sumCols">—</span></span>
+            <span><strong>Events:</strong> <span id="sumEvents">—</span></span>
+            <span><strong>Recall:</strong> <span id="sumRecall">—</span></span>
+            <span><strong>Prec / F1:</strong> <span id="sumPrecision">—</span></span>
+            <span><strong>Med Err:</strong> <span id="sumMedErr">—</span></span>
+            <span><strong>Time:</strong> <span id="sumTime">—</span></span>
+          </div>
+          <div class="pane-subhead" id="presetMetaLine"></div>
+          <div class="table-scroll">
+            <table class="rdp-table rdp-table-select" id="level1EventsTable">
+              <thead>
+                <tr>
+                  <th>Event #</th>
+                  <th>Method</th>
+                  <th>BP (orig)</th>
+                  <th>Span (orig)</th>
+                  <th>Peaks</th>
+                  <th>flank_kl z</th>
+                  <th>TF logit (P)</th>
+                  <th>Carriers</th>
+                  <th>Ext Parents (L→R)</th>
+                  <th>Status</th>
+                </tr>
+              </thead>
+              <tbody id="level1EventsBody"></tbody>
+            </table>
+          </div>
+        </div>
+
+        <!-- TAB: Matrices / Parents (Level 2 & Level 3) -->
+        <div id="tab-parents" class="tab-content hidden">
+          <div class="pane-subhead" id="level2HeaderTitle">Select an event in Overview to inspect carrier sequences and parental candidates.</div>
+          <div class="table-scroll">
+            <table class="rdp-table rdp-table-select" id="level2CarriersTable">
+              <thead>
+                <tr>
+                  <th>seq_idx</th>
+                  <th>Name</th>
+                  <th>p_switch</th>
+                  <th>Left Parent (ext)</th>
+                  <th>Right Parent (ext)</th>
+                  <th>Left Sim</th>
+                  <th>Right Sim</th>
+                </tr>
+              </thead>
+              <tbody id="level2CarriersBody"></tbody>
+            </table>
+          </div>
+          <div class="pane-subhead mt-6" id="level3HeaderTitle">Level 3 Ranked Parental-Like Candidates</div>
+          <div id="level3ParentsContainer"></div>
+        </div>
+
+        <!-- TAB: TP / FP / FN Diagnostics -->
+        <div id="tab-diagnostics" class="tab-content hidden">
+          <div class="pane-subhead" id="diagVerdictBanner"></div>
+          <div class="table-scroll">
+            <table class="rdp-table" id="toleranceMetricsTable">
+              <thead>
+                <tr>
+                  <th>Tol (±bp)</th>
+                  <th>TP</th>
+                  <th>FP</th>
+                  <th>FN</th>
+                  <th>Recall</th>
+                  <th>Precision</th>
+                  <th>F1</th>
+                  <th>Ctrl F1</th>
+                  <th>Lift</th>
+                  <th>Med Err</th>
+                </tr>
+              </thead>
+              <tbody id="toleranceMetricsBody"></tbody>
+            </table>
+          </div>
+          <div class="pane-subhead mt-6">Ground Truth Breakpoints: Detected (TP) vs. Missed (FN)</div>
+          <div class="table-scroll">
+            <table class="rdp-table" id="gtDiagnosticTable">
+              <thead>
+                <tr>
+                  <th>Status</th>
+                  <th>GT bp</th>
+                  <th>GT Event</th>
+                  <th>Type</th>
+                  <th>Matched Pred</th>
+                  <th>Err</th>
+                  <th>Local z</th>
+                  <th>Diagnostic / Failure Note</th>
+                  <th>Note</th>
+                </tr>
+              </thead>
+              <tbody id="gtDiagnosticBody"></tbody>
+            </table>
+          </div>
+          <div class="pane-subhead mt-6">Predicted Consolidated Calls: Matched (TP) vs. Unmatched (FP)</div>
+          <div class="table-scroll">
+            <table class="rdp-table" id="predDiagnosticTable">
+              <thead>
+                <tr>
+                  <th>Status</th>
+                  <th>Event #</th>
+                  <th>Pred bp</th>
+                  <th>z / TF</th>
+                  <th>Matched GT</th>
+                  <th>Err</th>
+                  <th>Explanation</th>
+                  <th>Action</th>
+                </tr>
+              </thead>
+              <tbody id="predDiagnosticBody"></tbody>
+            </table>
+          </div>
+        </div>
+
+        <!-- TAB: Inference Timings -->
+        <div id="tab-timings" class="tab-content hidden">
+          <div class="pane-subhead" id="timingRunSubtitle"></div>
+          <div class="table-scroll">
+            <table class="rdp-table" id="currentTimingTable">
+              <thead>
+                <tr>
+                  <th>Pipeline Stage</th>
+                  <th>Duration (ms)</th>
+                  <th>Share (%)</th>
+                  <th>Items</th>
+                  <th>Throughput</th>
+                  <th>Notes</th>
+                </tr>
+              </thead>
+              <tbody id="currentTimingBody"></tbody>
+            </table>
+          </div>
+          <div class="pane-subhead mt-6">Recorded Live Inference Timing History</div>
+          <div class="table-scroll">
+            <table class="rdp-table" id="historyTimingTable">
+              <thead>
+                <tr>
+                  <th>run_id</th>
+                  <th>dataset</th>
+                  <th>checkpoint</th>
+                  <th>mode</th>
+                  <th>S × L</th>
+                  <th>M_tx</th>
+                  <th>Parse</th>
+                  <th>Embed</th>
+                  <th>TF Fwd</th>
+                  <th>Flank-KL</th>
+                  <th>Total (ms)</th>
+                  <th>bp/s</th>
+                </tr>
+              </thead>
+              <tbody id="historyTimingBody"></tbody>
+            </table>
+          </div>
+        </div>
+
+        <!-- TAB: 10k & Extreme Validation -->
+        <div id="tab-benchmarks" class="tab-content hidden">
+          <div class="pane-subhead">10,000-Alignment Scaling &amp; Specificity Benchmark (scaling_results_summary.csv)</div>
+          <div class="table-scroll">
+            <table class="rdp-table" id="scalingBenchmarkTable">
+              <thead id="scalingBenchmarkHead"></thead>
+              <tbody id="scalingBenchmarkBody"></tbody>
+            </table>
+          </div>
+          <div class="pane-subhead mt-6">Out-of-Range Extreme Generalisation &amp; Control Specificity (out_of_range_results_summary.csv)</div>
+          <div class="table-scroll">
+            <table class="rdp-table" id="extremeBenchmarkTable">
+              <thead id="extremeBenchmarkHead"></thead>
+              <tbody id="extremeBenchmarkBody"></tbody>
+            </table>
+          </div>
+        </div>
+
+        <!-- TAB: Notes -->
+        <div id="tab-notes" class="tab-content hidden">
+          <div class="notes-head-row">
+            <span class="pane-subhead">Reviewer Diagnostic Feedback Annotations</span>
+            <button type="button" id="btnOpenAnnotationModal" class="mini-btn">+ Add Note</button>
+          </div>
+          <div class="table-scroll">
+            <table class="rdp-table" id="annotationsTable">
+              <thead>
+                <tr>
+                  <th>Timestamp</th>
+                  <th>Dataset</th>
+                  <th>Target</th>
+                  <th>Verdict</th>
+                  <th>Reviewer</th>
+                  <th>Comment</th>
+                </tr>
+              </thead>
+              <tbody id="annotationsBody"></tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- PANE 3 (BOTTOM-LEFT): RDP5 Breakpoint / Boundary Scan Plot + Side Controls -->
+    <section class="rdp-pane pane-plot">
+      <div class="plot-split">
+        <div class="plot-canvas-box">
+          <canvas id="genomeTrackCanvas" width="760" height="235"></canvas>
+          <div id="trackTooltip" class="plot-tooltip hidden"></div>
+        </div>
+
+        <aside class="plot-side-controls">
+          <div class="readout-box" id="cursorReadoutBox">0 : 0.00</div>
+          <button type="button" id="btnRunSide" class="win-btn win-btn-run">Run</button>
+
+          <label class="side-lbl" for="scoringModeSelect">Check using</label>
+          <select id="scoringModeSelect" class="win-select"></select>
+
+          <label class="side-lbl" for="checkpointSelect">Checkpoint</label>
+          <select id="checkpointSelect" class="win-select"></select>
+
+          <label class="side-lbl" for="evalToleranceInput">Eval tol (±bp)</label>
+          <select id="evalToleranceInput" class="win-select">
+            <option value="0">±0 bp</option>
+            <option value="3">±3 bp</option>
+            <option value="10">±10 bp</option>
+            <option value="30" selected>±30 bp</option>
+            <option value="50">±50 bp</option>
+          </select>
+
+          <button type="button" id="btnOptionsSide" class="win-btn">Options...</button>
+          <button type="button" id="btnOpenSide" class="win-btn">Open FASTA...</button>
+        </aside>
+      </div>
+    </section>
+
+    <!-- PANE 4 (BOTTOM-RIGHT): RDP5 Mosaic Sequence Map (Parental Tract Bars) -->
+    <section class="rdp-pane pane-mosaic">
+      <div class="pane-header">
+        <span class="pane-title">Recombinant Sequence Mosaic Map (Inferred Parental Tracts)</span>
+        <div class="mosaic-controls">
+          <label class="mini-lbl"><input type="checkbox" id="chkMosaicSelectedOnly" /> Selected event only</label>
+          <span class="mono-muted" id="mosaicLegendSummary"></span>
+        </div>
+      </div>
+      <div class="mosaic-canvas-scroll">
+        <canvas id="mosaicMapCanvas" width="700" height="220"></canvas>
+      </div>
+    </section>
+  </main>
+
+  <!-- MODAL 1: Open / Upload FASTA Alignment & Ground Truth -->
+  <div id="openModal" class="modal-overlay hidden">
+    <div class="modal-box">
+      <div class="modal-head">
+        <span>Open Alignment &amp; Optional Ground-Truth Log</span>
+        <button type="button" id="btnCloseOpenModal" class="mini-btn">✕</button>
+      </div>
+      <form id="uploadForm">
+        <div class="modal-content">
+          <label class="side-lbl" for="fastaFileInput">Upload FASTA file (.fasta, .fas, .fa)</label>
+          <input type="file" id="fastaFileInput" accept=".fasta,.fas,.fa,.txt" class="win-file" />
+
+          <label class="side-lbl mt-6" for="pastedFastaInput">Or paste FASTA sequences</label>
+          <textarea
+            id="pastedFastaInput"
+            class="win-textarea"
+            rows="6"
+            placeholder=">Seq_0&#10;ACGTACGT...&#10;>Seq_1&#10;ACGTACGT..."
+          ></textarea>
+
+          <hr class="sep" />
+
+          <label class="side-lbl" for="gtFileInput">Optional Ground-Truth Log (.json, .csv, SantaSim .txt)</label>
+          <input type="file" id="gtFileInput" accept=".json,.csv,.tsv,.txt" class="win-file" />
+
+          <label class="side-lbl mt-6" for="pastedGtInput">Or breakpoint coordinates (bp, comma-separated)</label>
+          <input
+            type="text"
+            id="pastedGtInput"
+            class="win-input"
+            placeholder="78, 288, 951, 993, 1098, 2523, 2913, 3222, 3399"
+          />
+        </div>
+        <div class="modal-foot">
+          <button type="button" id="btnClearUpload" class="win-btn">Use Preset Instead</button>
+          <button type="button" id="btnCancelOpenModal" class="win-btn">Cancel</button>
+          <button type="submit" class="win-btn win-btn-run">Load &amp; Run</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- MODAL 2: Options Dialog (RDP5 / OpenRDP .ini Parameters) -->
+  <div id="optionsModal" class="modal-overlay hidden">
+    <div class="modal-box">
+      <div class="modal-head">
+        <span>Detection Options &amp; OpenRDP-Style Configuration</span>
+        <button type="button" id="btnCloseOptionsModal" class="mini-btn">✕</button>
+      </div>
+      <div class="modal-content">
+        <div class="grid-2">
+          <div>
+            <label class="side-lbl" for="zThreshInput">KL z-score threshold</label>
+            <input type="number" id="zThreshInput" class="win-input" value="6.0" step="0.5" min="1.0" max="20.0" />
+          </div>
+          <div>
+            <label class="side-lbl" for="tfLogitThreshInput">Transformer logit threshold</label>
+            <input type="number" id="tfLogitThreshInput" class="win-input" value="0.8" step="0.1" min="-2.0" max="5.0" />
+          </div>
+          <div>
+            <label class="side-lbl" for="flankWindowInput">Flanking window L_w (cols)</label>
+            <input type="number" id="flankWindowInput" class="win-input" value="250" step="25" min="25" max="1000" />
+          </div>
+          <div>
+            <label class="side-lbl" for="mergeRadiusInput">Consolidation merge radius (bp)</label>
+            <input type="number" id="mergeRadiusInput" class="win-input" value="75" step="5" min="5" max="300" />
+          </div>
+          <div>
+            <label class="side-lbl" for="betaInput">Softmax inverse temp (beta)</label>
+            <input type="number" id="betaInput" class="win-input" value="20.0" step="1.0" min="1.0" max="60.0" />
+          </div>
+          <div>
+            <label class="side-lbl" for="nullPolicyInput">3rd-state null policy</label>
+            <select id="nullPolicyInput" class="win-select">
+              <option value="duplicate" selected>duplicate</option>
+              <option value="zero">zero</option>
+              <option value="drop">drop</option>
+            </select>
+          </div>
+        </div>
+        <label class="side-lbl mt-6">OpenRDP-style config preview</label>
+        <pre id="iniPreviewBox" class="ini-preview"></pre>
+      </div>
+      <div class="modal-foot">
+        <button type="button" id="btnCancelOptions" class="win-btn">Close</button>
+        <button type="button" id="btnApplyOptions" class="win-btn win-btn-run">Apply &amp; Run</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- MODAL 3: Reviewer Annotation Note -->
+  <div id="annotationModal" class="modal-overlay hidden">
+    <div class="modal-box">
+      <div class="modal-head">
+        <span>Record Diagnostic Note</span>
+        <button type="button" id="btnCloseModal" class="mini-btn">✕</button>
+      </div>
+      <form id="annotationForm">
+        <div class="modal-content">
+          <div class="grid-2">
+            <div>
+              <label class="side-lbl" for="annTargetType">Target type</label>
+              <select id="annTargetType" class="win-select">
+                <option value="predicted_event">Predicted event</option>
+                <option value="missed_gt_breakpoint">Missed GT breakpoint (FN)</option>
+                <option value="general">General alignment note</option>
+              </select>
+            </div>
+            <div>
+              <label class="side-lbl" for="annTargetId">Target ID / bp</label>
+              <input type="text" id="annTargetId" class="win-input" placeholder="Event #2 (990 bp)" required />
+            </div>
+          </div>
+
+          <label class="side-lbl mt-6" for="annVerdict">Classification</label>
+          <select id="annVerdict" class="win-select">
+            <option value="confirmed_true_event">Confirmed true event (TP)</option>
+            <option value="tract_tail_echo">Tract-tail echo near true breakpoint</option>
+            <option value="homoplasy_false_positive">Homoplasy false positive (FP)</option>
+            <option value="boundary_dead_zone_miss">Boundary / edge miss (FN)</option>
+            <option value="parent_assignment_issue">Breakpoint ok, carrier/parent off</option>
+            <option value="other">Other</option>
+          </select>
+
+          <label class="side-lbl mt-6" for="annComment">Observation</label>
+          <textarea id="annComment" class="win-textarea" rows="3" required></textarea>
+        </div>
+        <div class="modal-foot">
+          <button type="button" id="btnCancelModal" class="win-btn">Cancel</button>
+          <button type="submit" class="win-btn win-btn-run">Save Note</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <script src="/static/js/app.js?v=3"></script>
+</body>
+</html>

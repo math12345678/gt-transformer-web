@@ -1,0 +1,651 @@
+/* ==========================================================================
+   RDP5 / OpenRDP Desktop-Style Scientific Workbench CSS
+   Plain Win32 / classic bioinformatics desktop styling — zero gradients/shadows
+   ========================================================================== */
+
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+html,
+body {
+  height: 100%;
+  font-family: "Segoe UI", Tahoma, -apple-system, BlinkMacSystemFont, Helvetica, Arial, sans-serif;
+  font-size: 12px;
+  line-height: 1.35;
+  color: #111111;
+  background-color: #d4d0c8;
+}
+
+code,
+.mono,
+.mono-muted,
+.rdp-table td.num,
+.aln-matrix-table {
+  font-family: "Consolas", "SFMono-Regular", Menlo, Monaco, "Liberation Mono", monospace;
+  font-size: 11.5px;
+}
+
+.mono-muted {
+  color: #444444;
+}
+
+.hidden {
+  display: none !important;
+}
+
+.mt-6 { margin-top: 6px; }
+.sep { border: 0; border-top: 1px solid #aca899; margin: 8px 0; }
+
+/* --------------------------------------------------------------------------
+   Top Desktop Toolbar (RDP5 Style)
+   -------------------------------------------------------------------------- */
+.rdp-toolbar {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 4px 8px;
+  background-color: #ece9d8;
+  border-bottom: 1px solid #808080;
+}
+
+.toolbar-buttons {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  flex-wrap: wrap;
+}
+
+.tb-sep {
+  width: 1px;
+  height: 20px;
+  background-color: #a0a0a0;
+  border-right: 1px solid #ffffff;
+  margin: 0 4px;
+}
+
+.tb-btn,
+.win-btn,
+.mini-btn {
+  display: inline-block;
+  font-family: inherit;
+  font-size: 11.5px;
+  color: #000000;
+  background-color: #ece9d8;
+  border-top: 1px solid #ffffff;
+  border-left: 1px solid #ffffff;
+  border-right: 1px solid #7f7f7f;
+  border-bottom: 1px solid #7f7f7f;
+  padding: 3px 9px;
+  cursor: pointer;
+  text-decoration: none;
+  white-space: nowrap;
+}
+
+.tb-btn:hover,
+.win-btn:hover,
+.mini-btn:hover {
+  background-color: #e0ddd0;
+}
+
+.tb-btn:active,
+.win-btn:active,
+.mini-btn:active {
+  border-top: 1px solid #7f7f7f;
+  border-left: 1px solid #7f7f7f;
+  border-right: 1px solid #ffffff;
+  border-bottom: 1px solid #ffffff;
+}
+
+.tb-btn-run,
+.win-btn-run {
+  font-weight: 700;
+  background-color: #dfe6ec;
+}
+
+.tb-btn:disabled,
+.win-btn:disabled {
+  color: #777777;
+  cursor: wait;
+}
+
+.mini-btn {
+  padding: 1px 6px;
+  font-size: 11px;
+}
+
+.btn-full {
+  width: 100%;
+  text-align: center;
+}
+
+.toolbar-dataset {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.tb-lbl {
+  font-weight: 700;
+  font-size: 11.5px;
+}
+
+.tb-select {
+  font-family: inherit;
+  font-size: 11.5px;
+  padding: 2px 4px;
+  border: 1px solid #7f9db9;
+  background-color: #ffffff;
+  max-width: 390px;
+}
+
+.status-box {
+  font-family: "Consolas", "SFMono-Regular", Menlo, monospace;
+  font-size: 11px;
+  padding: 2px 6px;
+  background-color: #e6f4ea;
+  border: 1px solid #68a678;
+  color: #135224;
+}
+
+/* --------------------------------------------------------------------------
+   Full-Length Overview Track (Top Magenta/Black Strip)
+   -------------------------------------------------------------------------- */
+.overview-strip-wrap {
+  width: 100%;
+  background-color: #f4f4f4;
+  border-bottom: 1px solid #808080;
+  padding: 2px 6px;
+}
+
+#overviewStripCanvas {
+  display: block;
+  width: 100%;
+  height: 28px;
+  border: 1px solid #808080;
+  background-color: #ffffff;
+  cursor: pointer;
+}
+
+/* --------------------------------------------------------------------------
+   2x2 RDP5 Split Desktop Grid
+   -------------------------------------------------------------------------- */
+.rdp-grid {
+  display: grid;
+  grid-template-columns: 1.05fr 0.95fr;
+  grid-template-rows: minmax(340px, 50vh) minmax(260px, 39vh);
+  gap: 5px;
+  padding: 5px;
+  min-height: calc(100vh - 68px);
+}
+
+@media (max-width: 1100px) {
+  .rdp-grid {
+    grid-template-columns: 1fr;
+    grid-template-rows: auto;
+  }
+}
+
+.rdp-pane {
+  background-color: #f4f3ee;
+  border-top: 1px solid #808080;
+  border-left: 1px solid #808080;
+  border-right: 1px solid #ffffff;
+  border-bottom: 1px solid #ffffff;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+}
+
+.pane-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 6px;
+  background-color: #e4e2d8;
+  border-bottom: 1px solid #a0a0a0;
+  flex-wrap: wrap;
+}
+
+.pane-title {
+  font-weight: 700;
+  font-size: 11.5px;
+  color: #111111;
+}
+
+/* --------------------------------------------------------------------------
+   Top-Left Pane: Sequence Alignment Viewer
+   -------------------------------------------------------------------------- */
+.aln-nav-controls {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+}
+
+.mini-lbl {
+  font-size: 11px;
+  color: #222222;
+}
+
+.mini-input {
+  width: 58px;
+  padding: 1px 3px;
+  font-family: "Consolas", monospace;
+  font-size: 11px;
+  border: 1px solid #7f9db9;
+  background-color: #ffffff;
+}
+
+.aln-viewer-body {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 170px;
+  flex: 1;
+  min-height: 0;
+  background-color: #ffffff;
+}
+
+.aln-matrix-scroll {
+  overflow: auto;
+  border-right: 1px solid #999999;
+  background-color: #ffffff;
+  padding: 2px 4px;
+}
+
+.aln-matrix-table {
+  border-collapse: collapse;
+  font-size: 11.5px;
+  line-height: 1.25;
+  white-space: pre;
+}
+
+.aln-ruler-row th {
+  font-weight: 700;
+  color: #222222;
+  background-color: #ece9d8;
+  border-bottom: 1px solid #808080;
+  padding: 1px 0;
+  text-align: center;
+  position: sticky;
+  top: 0;
+  z-index: 2;
+}
+
+.aln-seq-row td {
+  padding: 0;
+}
+
+.aln-row-idx {
+  background-color: #f0efe8;
+  color: #444444;
+  padding: 0 5px !important;
+  border-right: 1px solid #cccccc;
+  text-align: right;
+  user-select: none;
+}
+
+.aln-row-carrier .aln-row-idx {
+  background-color: #d6e4f5;
+  font-weight: 700;
+  color: #003366;
+}
+
+.aln-row-parent .aln-row-idx {
+  background-color: #e4f2e6;
+  font-weight: 700;
+  color: #135224;
+}
+
+.nt-cell {
+  display: inline-block;
+  width: 9px;
+  text-align: center;
+}
+
+.nt-info {
+  background-color: #eab0ea;
+  color: #000000;
+}
+
+.nt-bp {
+  border-left: 2px solid #cc0000;
+}
+
+.aln-seq-sidebar {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  background-color: #f8f8f5;
+}
+
+.aln-seq-sidebar-head {
+  padding: 3px;
+  border-bottom: 1px solid #cccccc;
+}
+
+.aln-seq-list {
+  flex: 1;
+  overflow-y: auto;
+  font-family: "Consolas", monospace;
+  font-size: 11px;
+}
+
+.seq-list-item {
+  padding: 1px 5px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  border-bottom: 1px solid #eeeeee;
+  cursor: pointer;
+}
+
+.seq-list-item.is-carrier {
+  background-color: #dce8fa;
+  font-weight: 700;
+}
+
+.seq-list-item.is-parent {
+  background-color: #e6f4ea;
+}
+
+/* --------------------------------------------------------------------------
+   Top-Right Pane: RDP5 Tabbed Inspector
+   -------------------------------------------------------------------------- */
+.rdp-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px;
+  padding: 3px 4px 0 4px;
+  background-color: #e4e2d8;
+  border-bottom: 1px solid #808080;
+}
+
+.rdp-tab {
+  font-family: inherit;
+  font-size: 11.5px;
+  padding: 3px 10px;
+  background-color: #d8d5ca;
+  border: 1px solid #808080;
+  border-bottom: none;
+  color: #222222;
+  cursor: pointer;
+}
+
+.rdp-tab.active {
+  background-color: #ffffff;
+  color: #000000;
+  font-weight: 700;
+  margin-bottom: -1px;
+  padding-bottom: 4px;
+}
+
+.pane-tab-body {
+  flex: 1;
+  overflow: auto;
+  background-color: #ffffff;
+  padding: 6px 8px;
+  min-height: 0;
+}
+
+.tab-content {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.summary-bar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  padding: 4px 6px;
+  background-color: #f4f3ee;
+  border: 1px solid #b8b8b8;
+  font-family: "Consolas", monospace;
+  font-size: 11px;
+}
+
+.pane-subhead {
+  font-size: 11.5px;
+  font-weight: 700;
+  color: #222222;
+}
+
+.notes-head-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+/* Tables */
+.table-scroll {
+  overflow-x: auto;
+}
+
+.rdp-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 11.5px;
+  font-variant-numeric: tabular-nums;
+}
+
+.rdp-table th,
+.rdp-table td {
+  border: 1px solid #c0c0c0;
+  padding: 3px 6px;
+  text-align: left;
+  vertical-align: top;
+}
+
+.rdp-table th {
+  background-color: #ece9d8;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.rdp-table-select tbody tr {
+  cursor: pointer;
+}
+
+.rdp-table-select tbody tr:hover {
+  background-color: #eef3fa;
+}
+
+.rdp-table-select tbody tr.selected-row {
+  background-color: #cfe2ff;
+}
+
+.btn-link {
+  background: none;
+  border: none;
+  color: #004499;
+  text-decoration: underline;
+  font-size: 11.5px;
+  cursor: pointer;
+  padding: 0;
+}
+
+/* Status tags */
+.tag {
+  display: inline-block;
+  font-family: "Consolas", monospace;
+  font-size: 10.5px;
+  font-weight: 700;
+  padding: 0 4px;
+  border: 1px solid #999999;
+}
+
+.tag-tp { background-color: #e6f4ea; border-color: #68a678; color: #135224; }
+.tag-fn { background-color: #fce8e6; border-color: #c9736d; color: #7a1610; }
+.tag-fp { background-color: #fef3db; border-color: #c79a44; color: #5c3c00; }
+.tag-unlabelled { background-color: #eeeeee; border-color: #999999; color: #333333; }
+
+/* --------------------------------------------------------------------------
+   Bottom-Left Pane: Breakpoint Scan Plot & Side Controls (RDP5 Layout)
+   -------------------------------------------------------------------------- */
+.plot-split {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 158px;
+  flex: 1;
+  min-height: 0;
+  padding: 5px;
+  gap: 6px;
+}
+
+.plot-canvas-box {
+  position: relative;
+  background-color: #ffffff;
+  border: 1px solid #808080;
+  min-width: 0;
+  min-height: 0;
+}
+
+#genomeTrackCanvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+  cursor: crosshair;
+}
+
+.plot-tooltip {
+  position: absolute;
+  pointer-events: none;
+  background-color: #ffffe1;
+  color: #000000;
+  border: 1px solid #555555;
+  padding: 4px 6px;
+  font-family: "Consolas", monospace;
+  font-size: 11px;
+  z-index: 15;
+  max-width: 260px;
+}
+
+.plot-side-controls {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.readout-box {
+  background-color: #ffffff;
+  border: 1px solid #808080;
+  padding: 3px 5px;
+  text-align: center;
+  font-family: "Consolas", monospace;
+  font-size: 11.5px;
+  font-weight: 700;
+}
+
+.side-lbl {
+  display: block;
+  font-size: 11px;
+  font-weight: 700;
+  color: #222222;
+}
+
+.win-select,
+.win-input,
+.win-textarea {
+  width: 100%;
+  padding: 3px 4px;
+  font-size: 11.5px;
+  font-family: inherit;
+  border: 1px solid #7f9db9;
+  background-color: #ffffff;
+}
+
+.win-file {
+  width: 100%;
+  font-size: 11.5px;
+}
+
+/* --------------------------------------------------------------------------
+   Bottom-Right Pane: Mosaic Map
+   -------------------------------------------------------------------------- */
+.mosaic-controls {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.mosaic-canvas-scroll {
+  flex: 1;
+  overflow: auto;
+  background-color: #ffffff;
+  border-top: 1px solid #b8b8b8;
+  padding: 4px;
+}
+
+#mosaicMapCanvas {
+  display: block;
+  width: 100%;
+}
+
+/* --------------------------------------------------------------------------
+   Modals (Options / Open / Annotate)
+   -------------------------------------------------------------------------- */
+.modal-overlay {
+  position: fixed;
+  inset: 0;
+  background-color: rgba(0, 0, 0, 0.35);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 50;
+  padding: 12px;
+}
+
+.modal-box {
+  background-color: #ece9d8;
+  border-top: 2px solid #ffffff;
+  border-left: 2px solid #ffffff;
+  border-right: 2px solid #404040;
+  border-bottom: 2px solid #404040;
+  width: 100%;
+  max-width: 500px;
+}
+
+.modal-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 4px 8px;
+  background-color: #0a246a;
+  color: #ffffff;
+  font-weight: 700;
+  font-size: 12px;
+}
+
+.modal-content {
+  padding: 10px 12px;
+}
+
+.modal-foot {
+  display: flex;
+  justify-content: flex-end;
+  gap: 6px;
+  padding: 8px 12px;
+  border-top: 1px solid #aca899;
+}
+
+.grid-2 {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+
+.ini-preview {
+  background-color: #ffffff;
+  border: 1px solid #7f9db9;
+  padding: 6px;
+  font-family: "Consolas", monospace;
+  font-size: 11px;
+  max-height: 120px;
+  overflow: auto;
+  margin-top: 3px;
+}
