@@ -1,0 +1,130 @@
+[
+  {
+    "event_id": 4603,
+    "generation": 1544,
+    "event_type": "double",
+    "anchor": null,
+    "breakpoints_orig": [
+      1239,
+      3399
+    ],
+    "boundaries_tx": [
+      1141,
+      3075
+    ]
+  },
+  {
+    "event_id": 5460,
+    "generation": 1819,
+    "event_type": "double",
+    "anchor": null,
+    "breakpoints_orig": [
+      288,
+      2910
+    ],
+    "boundaries_tx": [
+      263,
+      2654
+    ]
+  },
+  {
+    "event_id": 5533,
+    "generation": 1836,
+    "event_type": "single",
+    "anchor": "end",
+    "breakpoints_orig": [
+      2523
+    ],
+    "boundaries_tx": [
+      2310
+    ]
+  },
+  {
+    "event_id": 5682,
+    "generation": 1880,
+    "event_type": "single",
+    "anchor": "end",
+    "breakpoints_orig": [
+      2835
+    ],
+    "boundaries_tx": [
+      2594
+    ]
+  },
+  {
+    "event_id": 5860,
+    "generation": 1942,
+    "event_type": "double",
+    "anchor": null,
+    "breakpoints_orig": [
+      1098,
+      2913
+    ],
+    "boundaries_tx": [
+      998,
+      2656
+    ]
+  },
+  {
+    "event_id": 5884,
+    "generation": 1950,
+    "event_type": "single",
+    "anchor": "start",
+    "breakpoints_orig": [
+      78
+    ],
+    "boundaries_tx": [
+      70
+    ]
+  },
+  {
+    "event_id": 5921,
+    "generation": 1962,
+    "event_type": "double",
+    "anchor": null,
+    "breakpoints_orig": [
+      951,
+      3222
+    ],
+    "boundaries_tx": [
+      854,
+      2928
+    ]
+  },
+  {
+    "event_id": 5985,
+    "generation": 1983,
+    "event_type": "single",
+    "anchor": "end",
+    "breakpoints_orig": [
+      2904
+    ],
+    "boundaries_tx": [
+      2649
+    ]
+  },
+  {
+    "event_id": 6005,
+    "generation": 1989,
+    "event_type": "single",
+    "anchor": "start",
+    "breakpoints_orig": [
+      993
+    ],
+    "boundaries_tx": [
+      890
+    ]
+  },
+  {
+    "event_id": 6038,
+    "generation": 1998,
+    "event_type": "single",
+    "anchor": "start",
+    "breakpoints_orig": [
+      78
+    ],
+    "boundaries_tx": [
+      70
+    ]
+  }
+]

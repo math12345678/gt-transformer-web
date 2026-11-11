@@ -14,15 +14,19 @@ import time
 from pathlib import Path
 import numpy as np
 
-GT_ROOT = Path(__file__).resolve().parents[2]
-WEB_ROOT = GT_ROOT / "web"
-if str(GT_ROOT) not in sys.path:
-    sys.path.insert(0, str(GT_ROOT))
+WEB_ROOT = Path(__file__).resolve().parents[1]
 if str(WEB_ROOT) not in sys.path:
     sys.path.insert(0, str(WEB_ROOT))
 
-import pipeline as P
-import haldec as H
+try:
+    from gt_core import pipeline as P
+    from gt_core import haldec as H
+except ImportError:
+    GT_ROOT = Path(__file__).resolve().parents[2]
+    if str(GT_ROOT) not in sys.path:
+        sys.path.insert(0, str(GT_ROOT))
+    import pipeline as P
+    import haldec as H
 import app as web_app
 from schemas import InferenceConfig
 

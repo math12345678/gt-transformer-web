@@ -1,0 +1,80 @@
+[
+  {
+    "event_id": 5504,
+    "generation": 1828,
+    "event_type": "double",
+    "anchor": null,
+    "breakpoints_orig": [
+      402,
+      1788
+    ],
+    "boundaries_tx": [
+      322,
+      1607
+    ]
+  },
+  {
+    "event_id": 5599,
+    "generation": 1867,
+    "event_type": "double",
+    "anchor": null,
+    "breakpoints_orig": [
+      534,
+      3777
+    ],
+    "boundaries_tx": [
+      453,
+      3142
+    ]
+  },
+  {
+    "event_id": 5669,
+    "generation": 1887,
+    "event_type": "double",
+    "anchor": null,
+    "breakpoints_orig": [
+      846,
+      1440
+    ],
+    "boundaries_tx": [
+      733,
+      1293
+    ]
+  },
+  {
+    "event_id": 5935,
+    "generation": 1976,
+    "event_type": "single",
+    "anchor": "start",
+    "breakpoints_orig": [
+      483
+    ],
+    "boundaries_tx": [
+      406
+    ]
+  },
+  {
+    "event_id": 5948,
+    "generation": 1983,
+    "event_type": "single",
+    "anchor": "start",
+    "breakpoints_orig": [
+      1218
+    ],
+    "boundaries_tx": [
+      1084
+    ]
+  },
+  {
+    "event_id": 5983,
+    "generation": 1994,
+    "event_type": "single",
+    "anchor": "start",
+    "breakpoints_orig": [
+      1173
+    ],
+    "boundaries_tx": [
+      1039
+    ]
+  }
+]

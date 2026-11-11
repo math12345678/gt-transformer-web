@@ -1,0 +1,49 @@
+Category,Regime / Split,Mutation Rate (mu),Recombination Rate (r),Metric,Zero-Shot (7K In-Range Model),Multi-Rate Trained (7K + Extreme Model),Change
+=== POOLED OUT-OF-RANGE PERFORMANCE ===,,,,,,,
+Unseen Out-of-Range Test (14 Alignments),Pooled Recombinant (n=12),0.2x to 5.0x,0.2x to 5.0x,Token Detection Power (AUPRC),0.0583,0.1655,2.84x (+184.0%)
+Unseen Out-of-Range Test (14 Alignments),Pooled Recombinant (n=12),0.2x to 5.0x,0.2x to 5.0x,Optimal-Threshold F1,0.1339,0.2505,+87.1%
+Unseen Out-of-Range Test (14 Alignments),Pooled Recombinant (n=12),0.2x to 5.0x,0.2x to 5.0x,Macro Sensitivity @ +-30 bp,43.5%,48.9%,+5.4 pp
+Unseen Out-of-Range Test (14 Alignments),Pooled Recombinant (n=12),0.2x to 5.0x,0.2x to 5.0x,Macro Sensitivity @ +-10 bp,27.6%,32.3%,+4.7 pp
+Unseen Out-of-Range Test (14 Alignments),Pooled Recombinant (n=12),0.2x to 5.0x,0.2x to 5.0x,Breakpoint Precision @ +-30 bp,55.6%,56.3%,+0.7 pp
+Unseen Out-of-Range Test (14 Alignments),Pooled Recombinant (n=12),0.2x to 5.0x,0.2x to 5.0x,Median Localisation Error,5.0 bp,5.0 bp,0.0 bp
+Full Out-of-Range Suite (120 Alignments),Pooled Recombinant (n=100),0.2x to 5.0x,0.2x to 5.0x,Token Detection Power (AUPRC),0.0945,0.2802,2.97x (+196.5%)
+Full Out-of-Range Suite (120 Alignments),Pooled Recombinant (n=100),0.2x to 5.0x,0.2x to 5.0x,Optimal-Threshold F1,0.1992,0.3518,+76.6%
+Full Out-of-Range Suite (120 Alignments),Pooled Recombinant (n=100),0.2x to 5.0x,0.2x to 5.0x,Macro Sensitivity @ +-30 bp,30.7%,33.4%,+2.7 pp
+Full Out-of-Range Suite (120 Alignments),Pooled Recombinant (n=100),0.2x to 5.0x,0.2x to 5.0x,Macro Sensitivity @ +-10 bp,17.2%,21.3%,+4.1 pp
+Full Out-of-Range Suite (120 Alignments),Pooled Recombinant (n=100),0.2x to 5.0x,0.2x to 5.0x,Macro Sensitivity @ +-3 bp,7.3%,9.7%,+2.4 pp
+Full Out-of-Range Suite (120 Alignments),Pooled Recombinant (n=100),0.2x to 5.0x,0.2x to 5.0x,Breakpoint Precision @ +-30 bp,55.2%,56.1%,+0.9 pp
+Full Out-of-Range Suite (120 Alignments),Pooled Recombinant (n=100),0.2x to 5.0x,0.2x to 5.0x,Median Localisation Error,5.0 bp,5.0 bp,0.0 bp
+=== BREAKDOWN BY EXTREME EVOLUTIONARY REGIME ===,,,,,,,
+Low Mutation + Low Recombination,Held-Out Test (n=3),1.0e-4 (0.2x),0.001 (0.2x),Sensitivity @ +-30 bp,50.0%,100.0%,+50.0 pp
+Low Mutation + Low Recombination,Held-Out Test (n=3),1.0e-4 (0.2x),0.001 (0.2x),Sensitivity @ +-10 bp,0.0%,50.0%,+50.0 pp
+Low Mutation + Low Recombination,Held-Out Test (n=3),1.0e-4 (0.2x),0.001 (0.2x),Median Localisation Error,20.0 bp,15.0 bp,-5.0 bp
+Low Mutation + Low Recombination,Full Arm (n=25),1.0e-4 (0.2x),0.001 (0.2x),Macro Sensitivity @ +-30 bp,48.5%,50.6%,+2.1 pp
+Low Mutation + Low Recombination,Full Arm (n=25),1.0e-4 (0.2x),0.001 (0.2x),Macro Sensitivity @ +-10 bp,21.9%,24.4%,+2.5 pp
+High Mutation + Low Recombination,Full Arm (n=25),2.5e-3 (5.0x),0.001 (0.2x),Sensitivity @ +-30 bp,100.0%,100.0%,0.0 pp
+High Mutation + Low Recombination,Full Arm (n=25),2.5e-3 (5.0x),0.001 (0.2x),Sensitivity @ +-10 bp,66.7%,100.0%,+33.3 pp
+High Mutation + Low Recombination,Full Arm (n=25),2.5e-3 (5.0x),0.001 (0.2x),Sensitivity @ +-3 bp,0.0%,66.7%,+66.7 pp
+High Mutation + Low Recombination,Full Arm (n=25),2.5e-3 (5.0x),0.001 (0.2x),Median Localisation Error,10.0 bp,2.0 bp,-8.0 bp
+High Mutation + High Recombination,Held-Out Test (n=3),2.5e-3 (5.0x),0.250 (5.0x),Sensitivity @ +-30 bp,57.4%,59.5%,+2.1 pp
+High Mutation + High Recombination,Held-Out Test (n=3),2.5e-3 (5.0x),0.250 (5.0x),Precision @ +-30 bp,47.5%,48.4%,+0.9 pp
+High Mutation + High Recombination,Full Arm (n=25),2.5e-3 (5.0x),0.250 (5.0x),Macro Sensitivity @ +-30 bp,37.1%,43.1%,+6.0 pp
+High Mutation + High Recombination,Full Arm (n=25),2.5e-3 (5.0x),0.250 (5.0x),Macro Sensitivity @ +-10 bp,19.0%,24.2%,+5.2 pp
+High Mutation + High Recombination,Full Arm (n=25),2.5e-3 (5.0x),0.250 (5.0x),Macro Sensitivity @ +-3 bp,8.6%,11.5%,+2.9 pp
+High Mutation + High Recombination,Full Arm (n=25),2.5e-3 (5.0x),0.250 (5.0x),Event F1 @ +-30 bp,0.417,0.444,+0.027
+High Mutation + High Recombination,Full Arm (n=25),2.5e-3 (5.0x),0.250 (5.0x),Median Localisation Error,8.0 bp,8.0 bp,0.0 bp
+Low Mutation + High Recombination,Held-Out Test (n=3),1.0e-4 (0.2x),0.250 (5.0x),Sensitivity @ +-30 bp,13.1%,13.2%,+0.1 pp
+Low Mutation + High Recombination,Held-Out Test (n=3),1.0e-4 (0.2x),0.250 (5.0x),Sensitivity @ +-10 bp,10.7%,11.3%,+0.6 pp
+Low Mutation + High Recombination,Held-Out Test (n=3),1.0e-4 (0.2x),0.250 (5.0x),Precision @ +-30 bp,98.8%,98.8%,0.0 pp
+Low Mutation + High Recombination,Full Arm (n=25),1.0e-4 (0.2x),0.250 (5.0x),Optimal-Threshold F1,0.429,0.431,+0.002
+Low Mutation + High Recombination,Full Arm (n=25),1.0e-4 (0.2x),0.250 (5.0x),Median Localisation Error,4.0 bp,4.0 bp,0.0 bp
+Zero-Recombination Controls,Low & High Mutation (n=20),0.2x & 5.0x,0.0 (Control),False-Positive AUPRC / F1,0.0000,0.0000,0.0000
+=== TRANSFER TO EMPIRICAL BENCHMARKS & IN-RANGE TEST ===,,,,,,,
+Empirical Benchmark (bench95 + d005),Standalone Transformer,Empirical,Empirical,Sensitivity @ +-30 bp,52.6%,55.3%,+2.7 pp
+Empirical Benchmark (bench95 + d005),Standalone Transformer,Empirical,Empirical,Median Localisation Error,14.0 bp,13.0 bp,-1.0 bp
+Empirical Benchmark (bench95 + d005),Hybrid Detector (TF + Trees),Empirical,Empirical,Sensitivity @ +-30 bp,65.8%,68.4%,+2.6 pp
+Empirical Benchmark (bench95 + d005),Hybrid Detector (TF + Trees),Empirical,Empirical,Median Localisation Error,14.0 bp,10.5 bp,-3.5 bp
+Complex Benchmark d005 (13 Events),Standalone Transformer,Empirical,Empirical,Sensitivity @ +-30 bp,53.8% (7/13),84.6% (11/13),+30.8 pp (+4 events)
+Complex Benchmark d005 (13 Events),Standalone Transformer,Empirical,Empirical,Sensitivity @ +-10 bp,15.4% (2/13),38.5% (5/13),+23.1 pp (+3 events)
+Complex Benchmark d005 (13 Events),Hybrid Detector (TF + Trees),Empirical,Empirical,Sensitivity @ +-30 bp,84.6% (11/13),84.6% (11/13),0.0 pp
+Complex Benchmark d005 (13 Events),Hybrid Detector (TF + Trees),Empirical,Empirical,Sensitivity @ +-10 bp,53.8% (7/13),53.8% (7/13),0.0 pp
+In-Range Simulated Test (1,500 Alignments),Standalone Transformer,5.0e-4 (1.0x),0.005 to 0.05 (1.0x),Optimal-Threshold F1,0.4346,0.4277,-0.0069
+In-Range Simulated Test (1,500 Alignments),Standalone Transformer,5.0e-4 (1.0x),0.005 to 0.05 (1.0x),Token Detection Power (AUPRC),0.3656,0.3265,-0.0391

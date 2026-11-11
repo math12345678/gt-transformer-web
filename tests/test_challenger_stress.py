@@ -20,6 +20,7 @@ def test_seed42_permutations():
     print("CHALLENGE 1: Seed 42 Column Permutation on d048 and d005")
     print("=" * 60)
     
+    local_sample_dir = Path(__file__).resolve().parents[1] / "sample_data"
     workspace_root = Path(__file__).resolve().parents[4]
     aln_targets = [
         ("d048_L4577_s79_r001", "WINDOWS_RDP5_PACKAGE/01_ALIGNMENTS/d048_L4577_s79_r001.fas"),
@@ -27,9 +28,13 @@ def test_seed42_permutations():
     ]
     
     for name, rel_path in aln_targets:
-        aln_file = workspace_root / rel_path
-        if not aln_file.exists():
-            aln_file = Path(__file__).resolve().parents[2] / rel_path.split("gt-transformer/")[-1]
+        local_aln = local_sample_dir / f"{name}.fas"
+        if local_aln.exists():
+            aln_file = local_aln
+        else:
+            aln_file = workspace_root / rel_path
+            if not aln_file.exists():
+                aln_file = Path(__file__).resolve().parents[2] / rel_path.split("gt-transformer/")[-1]
         assert aln_file.exists(), f"File {aln_file} not found"
         
         raw_text = aln_file.read_text(encoding="utf-8", errors="replace")

@@ -24,17 +24,39 @@ from typing import Any, Optional
 
 import numpy as np
 
-# Wire parent gt-transformer infrastructure directory onto sys.path
-GT_ROOT = Path(__file__).resolve().parents[2]
-WORKSPACE_ROOT = GT_ROOT.parents[1]
-if str(GT_ROOT) not in sys.path:
-    sys.path.insert(0, str(GT_ROOT))
+# Set up web root on sys.path
+WEB_ROOT = Path(__file__).resolve().parents[1]
+if str(WEB_ROOT) not in sys.path:
+    sys.path.insert(0, str(WEB_ROOT))
 
-import haldec as H  # noqa: E402
-import model as M  # noqa: E402
-import pipeline as P  # noqa: E402
-import report as REP  # noqa: E402
-import train as T  # noqa: E402
+# Optional parent root for multi-checkpoint discovery when running in monorepo
+GT_ROOT = WEB_ROOT.parent
+WORKSPACE_ROOT = GT_ROOT.parent if (GT_ROOT / "pipeline.py").exists() else WEB_ROOT
+SAMPLE_DATA_DIR = WEB_ROOT / "sample_data"
+
+# Primary import from bundled gt_core with fallback to parent monorepo
+try:
+    from gt_core import haldec as H
+    from gt_core import model as M
+    from gt_core import pipeline as P
+    from gt_core import report as REP
+    from gt_core import train as T
+    CORE_ENGINE_SOURCE = "bundled:web/gt_core"
+except ImportError:
+    if (GT_ROOT / "pipeline.py").exists():
+        if str(GT_ROOT) not in sys.path:
+            sys.path.insert(0, str(GT_ROOT))
+        import haldec as H  # noqa: E402
+        import model as M  # noqa: E402
+        import pipeline as P  # noqa: E402
+        import report as REP  # noqa: E402
+        import train as T  # noqa: E402
+        CORE_ENGINE_SOURCE = f"monorepo_parent:{GT_ROOT}"
+    else:
+        raise ImportError(
+            f"Failed to load core gt-transformer inference engine. "
+            f"Neither bundled 'web/gt_core' nor parent '{GT_ROOT}' contains valid modules."
+        )
 
 from schemas import (  # noqa: E402
     AlignmentMetadata,
@@ -56,12 +78,10 @@ from services.timing import TimingHistoryStore, TimingRecorder  # noqa: E402
 
 
 # ---------------------------------------------------------------------------
-# Checkpoint Registry (Real Saved Pickle Checkpoints)
+# Checkpoint Metadata & Multi-Discovery
 # ---------------------------------------------------------------------------
-CHECKPOINT_REGISTRY: dict[str, dict[str, Any]] = {
+KNOWN_CHECKPOINT_METADATA: dict[str, dict[str, Any]] = {
     "ckpt_N10000_extreme": {
-        "id": "ckpt_N10000_extreme",
-        "path": GT_ROOT / "ckpt_N10000_extreme" / "params.pkl",
         "label": "ckpt_N10000_extreme — Latest Multi-Rate (7k In-Range + Extreme)",
         "description": (
             "Latest checkpoint trained jointly on 7,000 in-range alignments and extreme "
@@ -70,8 +90,6 @@ CHECKPOINT_REGISTRY: dict[str, dict[str, Any]] = {
         "recommended": True,
     },
     "ckpt_N10000": {
-        "id": "ckpt_N10000",
-        "path": GT_ROOT / "ckpt_N10000" / "params.pkl",
         "label": "ckpt_N10000 — 10k In-Range Scaling Model (val AUPRC 0.572)",
         "description": (
             "Trained on 7,000 in-range SantaSim alignments (10,000 corpus; 1,500 held-out test, "
@@ -80,36 +98,26 @@ CHECKPOINT_REGISTRY: dict[str, dict[str, Any]] = {
         "recommended": False,
     },
     "ckpt_N8000": {
-        "id": "ckpt_N8000",
-        "path": GT_ROOT / "ckpt_N8000" / "params.pkl",
         "label": "ckpt_N8000 — 8k Scaling Checkpoint (val AUPRC 0.539)",
         "description": "Trained on 5,600 in-range alignments from the 8k scaling tier.",
         "recommended": False,
     },
     "ckpt_N4000": {
-        "id": "ckpt_N4000",
-        "path": GT_ROOT / "ckpt_N4000" / "params.pkl",
         "label": "ckpt_N4000 — 4k Scaling Checkpoint (val AUPRC 0.362)",
         "description": "Intermediate scaling checkpoint trained on 2,800 alignments.",
         "recommended": False,
     },
     "ckpt_N2000": {
-        "id": "ckpt_N2000",
-        "path": GT_ROOT / "ckpt_N2000" / "params.pkl",
         "label": "ckpt_N2000 — 2k Scaling Checkpoint (val AUPRC 0.195)",
         "description": "Early scaling checkpoint trained on 1,400 alignments.",
         "recommended": False,
     },
     "ckpt_N1000": {
-        "id": "ckpt_N1000",
-        "path": GT_ROOT / "ckpt_N1000" / "params.pkl",
         "label": "ckpt_N1000 — 1k Scaling Checkpoint (val AUPRC 0.101)",
         "description": "1,000-alignment baseline scaling tier (700 training alignments).",
         "recommended": False,
     },
     "ckpt_4x_panel": {
-        "id": "ckpt_4x_panel",
-        "path": GT_ROOT / "ckpt" / "model_4x_data.pkl",
         "label": "ckpt_4x_panel — 50-Dataset Panel (4x Augmented Regime)",
         "description": "Original 2,000-step Window Transformer trained on the 35-alignment panel.",
         "recommended": False,
@@ -117,9 +125,120 @@ CHECKPOINT_REGISTRY: dict[str, dict[str, Any]] = {
 }
 
 
+def discover_available_checkpoints() -> dict[str, dict[str, Any]]:
+    """Discover checkpoints locally in web/checkpoints and optionally in parent directories."""
+    ckpts: dict[str, dict[str, Any]] = {}
+
+    # 1. Local web/checkpoints directory (Highest precedence)
+    local_dir = WEB_ROOT / "checkpoints"
+    if local_dir.is_dir():
+        for p in sorted(local_dir.iterdir()):
+            if p.is_dir() and (p / "params.pkl").is_file():
+                cid = p.name
+                meta = KNOWN_CHECKPOINT_METADATA.get(cid, {
+                    "label": f"{cid} (Bundled Local)",
+                    "description": f"Local checkpoint in web/checkpoints/{cid}",
+                    "recommended": (cid == "ckpt_N10000_extreme"),
+                })
+                ckpts[cid] = {
+                    "id": cid,
+                    "path": p / "params.pkl",
+                    "label": meta["label"],
+                    "description": meta["description"],
+                    "recommended": meta.get("recommended", False),
+                    "source": "local",
+                }
+            elif p.is_file() and p.suffix == ".pkl":
+                cid = p.stem
+                meta = KNOWN_CHECKPOINT_METADATA.get(cid, {
+                    "label": f"{cid} (Bundled Local)",
+                    "description": f"Local checkpoint {p.name}",
+                    "recommended": False,
+                })
+                ckpts[cid] = {
+                    "id": cid,
+                    "path": p,
+                    "label": meta["label"],
+                    "description": meta["description"],
+                    "recommended": meta.get("recommended", False),
+                    "source": "local",
+                }
+
+    # 2. Parent gt-transformer directory (Optional fallback in monorepo)
+    if GT_ROOT.is_dir():
+        parent_ckpts = GT_ROOT / "checkpoints"
+        if parent_ckpts.is_dir():
+            for p in sorted(parent_ckpts.iterdir()):
+                cid = p.name if p.is_dir() else p.stem
+                if cid not in ckpts:
+                    fpath = (p / "params.pkl") if p.is_dir() else p
+                    if fpath.is_file():
+                        meta = KNOWN_CHECKPOINT_METADATA.get(cid, {
+                            "label": f"{cid} (Parent Research Repo)",
+                            "description": f"Discovered in {parent_ckpts}",
+                            "recommended": False,
+                        })
+                        ckpts[cid] = {
+                            "id": cid,
+                            "path": fpath,
+                            "label": meta["label"],
+                            "description": meta["description"],
+                            "recommended": meta.get("recommended", False),
+                            "source": "parent",
+                        }
+        for p in sorted(GT_ROOT.glob("ckpt*")):
+            if p.is_dir():
+                cid = p.name
+                if cid not in ckpts and (p / "params.pkl").is_file():
+                    meta = KNOWN_CHECKPOINT_METADATA.get(cid, {
+                        "label": f"{cid} (Parent Research Repo)",
+                        "description": f"Discovered in parent {p.name}",
+                        "recommended": False,
+                    })
+                    ckpts[cid] = {
+                        "id": cid,
+                        "path": p / "params.pkl",
+                        "label": meta["label"],
+                        "description": meta["description"],
+                        "recommended": meta.get("recommended", False),
+                        "source": "parent",
+                    }
+                elif cid == "ckpt" and p.is_dir():
+                    p_4x = p / "model_4x_data.pkl"
+                    if p_4x.is_file() and "ckpt_4x_panel" not in ckpts:
+                        meta = KNOWN_CHECKPOINT_METADATA["ckpt_4x_panel"]
+                        ckpts["ckpt_4x_panel"] = {
+                            "id": "ckpt_4x_panel",
+                            "path": p_4x,
+                            "label": meta["label"],
+                            "description": meta["description"],
+                            "recommended": False,
+                            "source": "parent",
+                        }
+
+    return ckpts
+
+
+CHECKPOINT_REGISTRY: dict[str, dict[str, Any]] = discover_available_checkpoints()
+
+
 # ---------------------------------------------------------------------------
-# Preset Benchmark Datasets (Backed Directly by Real FASTA & Cache Files)
+# Preset Benchmark Datasets (Resolves Local sample_data first)
 # ---------------------------------------------------------------------------
+def resolve_preset_fasta_path(filename: str, fallback_path: Path) -> Path:
+    sample_path = SAMPLE_DATA_DIR / filename
+    if sample_path.exists():
+        return sample_path
+    return fallback_path
+
+
+def resolve_preset_cache_dir(preset_id: str, fallback_dir: Optional[Path]) -> Optional[Path]:
+    annot_dir = SAMPLE_DATA_DIR / "annotations"
+    if (annot_dir / preset_id / "meta.json").exists():
+        return annot_dir
+    return fallback_dir
+
+
 PRESET_REGISTRY: dict[str, dict[str, Any]] = {
     "d005_L3536_s96_r001": {
         "id": "d005_L3536_s96_r001",
@@ -129,8 +248,8 @@ PRESET_REGISTRY: dict[str, dict[str, Any]] = {
             "96 sequences × 3,536 bp SantaSim alignment with 10 events (13 real breakpoints). "
             "Tests edge events (78 bp, 3399 bp) and internal Event 4 (2523 bp)."
         ),
-        "fasta_path": WORKSPACE_ROOT / "WINDOWS_RDP5_PACKAGE" / "01_ALIGNMENTS" / "d005_L3536_s96_r001.fas",
-        "cache_dir": GT_ROOT / "cache",
+        "fasta_path": resolve_preset_fasta_path("d005_L3536_s96_r001.fas", WORKSPACE_ROOT / "WINDOWS_RDP5_PACKAGE" / "01_ALIGNMENTS" / "d005_L3536_s96_r001.fas"),
+        "cache_dir": resolve_preset_cache_dir("d005_L3536_s96_r001", GT_ROOT / "cache"),
         "is_control": False,
     },
     "d048_L4577_s79_r001": {
@@ -138,8 +257,8 @@ PRESET_REGISTRY: dict[str, dict[str, Any]] = {
         "label": "d048_L4577_s79_r001 — Held-Out Benchmark Test (S=79, L=4,577 bp, 9 GT bps)",
         "category": "Benchmark Panel (Held-Out Test Split)",
         "description": "Unseen held-out benchmark alignment (79 sequences × 4,577 bp, r=0.001, 6 events / 9 real bps).",
-        "fasta_path": WORKSPACE_ROOT / "WINDOWS_RDP5_PACKAGE" / "01_ALIGNMENTS" / "d048_L4577_s79_r001.fas",
-        "cache_dir": GT_ROOT / "cache",
+        "fasta_path": resolve_preset_fasta_path("d048_L4577_s79_r001.fas", WORKSPACE_ROOT / "WINDOWS_RDP5_PACKAGE" / "01_ALIGNMENTS" / "d048_L4577_s79_r001.fas"),
+        "cache_dir": resolve_preset_cache_dir("d048_L4577_s79_r001", GT_ROOT / "cache"),
         "is_control": False,
     },
     "d008_L8383_s79_r001": {
@@ -147,8 +266,8 @@ PRESET_REGISTRY: dict[str, dict[str, Any]] = {
         "label": "d008_L8383_s79_r001 — Held-Out Benchmark Test (S=79, L=8,383 bp, 8 GT bps)",
         "category": "Benchmark Panel (Held-Out Test Split)",
         "description": "Unseen held-out benchmark alignment (79 sequences × 8,383 bp, r=0.001, 6 events / 8 real bps).",
-        "fasta_path": WORKSPACE_ROOT / "WINDOWS_RDP5_PACKAGE" / "01_ALIGNMENTS" / "d008_L8383_s79_r001.fas",
-        "cache_dir": GT_ROOT / "cache",
+        "fasta_path": resolve_preset_fasta_path("d008_L8383_s79_r001.fas", WORKSPACE_ROOT / "WINDOWS_RDP5_PACKAGE" / "01_ALIGNMENTS" / "d008_L8383_s79_r001.fas"),
+        "cache_dir": resolve_preset_cache_dir("d008_L8383_s79_r001", GT_ROOT / "cache"),
         "is_control": False,
     },
     "d047_L15068_s27_ctrl": {
@@ -156,8 +275,8 @@ PRESET_REGISTRY: dict[str, dict[str, Any]] = {
         "label": "d047_L15068_s27_ctrl — Held-Out Clonal Control (S=27, L=15,068 bp, 0 GT)",
         "category": "Benchmark Panel (Held-Out Negative Control)",
         "description": "Strictly clonal held-out benchmark control alignment with 0 recombination events (specificity test).",
-        "fasta_path": WORKSPACE_ROOT / "WINDOWS_RDP5_PACKAGE" / "01_ALIGNMENTS" / "d047_L15068_s27_ctrl.fas",
-        "cache_dir": GT_ROOT / "cache",
+        "fasta_path": resolve_preset_fasta_path("d047_L15068_s27_ctrl.fas", WORKSPACE_ROOT / "WINDOWS_RDP5_PACKAGE" / "01_ALIGNMENTS" / "d047_L15068_s27_ctrl.fas"),
+        "cache_dir": resolve_preset_cache_dir("d047_L15068_s27_ctrl", GT_ROOT / "cache"),
         "is_control": True,
     },
     "d00003_L2487_s28_r005": {
@@ -165,8 +284,8 @@ PRESET_REGISTRY: dict[str, dict[str, Any]] = {
         "label": "d00003_L2487_s28_r005 — 10k Corpus Held-Out Test (S=28, L=2,487 bp, r=0.005)",
         "category": "10,000-Alignment Corpus (Held-Out Test Split)",
         "description": "Unseen high-recombination test alignment from the 10k simulation corpus (94 events).",
-        "fasta_path": GT_ROOT / "datasets_sims" / "d00003_L2487_s28_r005.fas",
-        "cache_dir": GT_ROOT / "cache_sims",
+        "fasta_path": resolve_preset_fasta_path("d00003_L2487_s28_r005.fas", GT_ROOT / "datasets_sims" / "d00003_L2487_s28_r005.fas"),
+        "cache_dir": resolve_preset_cache_dir("d00003_L2487_s28_r005", GT_ROOT / "cache_sims"),
         "is_control": False,
     },
     "d00011_L9812_s43_r0005": {
@@ -174,8 +293,8 @@ PRESET_REGISTRY: dict[str, dict[str, Any]] = {
         "label": "d00011_L9812_s43_r0005 — 10k Corpus Sparse Test (S=43, L=9,812 bp, 2 GT bps)",
         "category": "10,000-Alignment Corpus (Held-Out Test Split)",
         "description": "Unseen sparse-recombination test alignment from the 10k corpus (2 events / 2 real breakpoints).",
-        "fasta_path": GT_ROOT / "datasets_sims" / "d00011_L9812_s43_r0005.fas",
-        "cache_dir": GT_ROOT / "cache_sims",
+        "fasta_path": resolve_preset_fasta_path("d00011_L9812_s43_r0005.fas", GT_ROOT / "datasets_sims" / "d00011_L9812_s43_r0005.fas"),
+        "cache_dir": resolve_preset_cache_dir("d00011_L9812_s43_r0005", GT_ROOT / "cache_sims"),
         "is_control": False,
     },
     "d00005_L7268_s23_ctrl": {
@@ -183,8 +302,8 @@ PRESET_REGISTRY: dict[str, dict[str, Any]] = {
         "label": "d00005_L7268_s23_ctrl — 10k Corpus Clonal Control (S=23, L=7,268 bp, 0 GT)",
         "category": "10,000-Alignment Corpus (Held-Out Negative Control)",
         "description": "Unseen clonal negative control from the 10k corpus (0 true events; tests false-positive rate).",
-        "fasta_path": GT_ROOT / "datasets_sims" / "d00005_L7268_s23_ctrl.fas",
-        "cache_dir": GT_ROOT / "cache_sims",
+        "fasta_path": resolve_preset_fasta_path("d00005_L7268_s23_ctrl.fas", GT_ROOT / "datasets_sims" / "d00005_L7268_s23_ctrl.fas"),
+        "cache_dir": resolve_preset_cache_dir("d00005_L7268_s23_ctrl", GT_ROOT / "cache_sims"),
         "is_control": True,
     },
     "ext_0076_L4413_s95_high_mu_high_r_mu25_r025": {
@@ -192,8 +311,8 @@ PRESET_REGISTRY: dict[str, dict[str, Any]] = {
         "label": "ext_0076 — Extreme 5x Mu + 5x Recomb (S=95, L=4,413 bp, mu=2.5e-3, r=0.25)",
         "category": "Out-of-Range Extreme Suite (500% Rate Arm)",
         "description": "Extreme out-of-range alignment at 5x mutation and 5x recombination rates.",
-        "fasta_path": GT_ROOT / "datasets_extreme" / "ext_0076_L4413_s95_high_mu_high_r_mu25_r025.fas",
-        "cache_dir": GT_ROOT / "cache_extreme",
+        "fasta_path": resolve_preset_fasta_path("ext_0076_L4413_s95_high_mu_high_r_mu25_r025.fas", GT_ROOT / "datasets_extreme" / "ext_0076_L4413_s95_high_mu_high_r_mu25_r025.fas"),
+        "cache_dir": resolve_preset_cache_dir("ext_0076_L4413_s95_high_mu_high_r_mu25_r025", GT_ROOT / "cache_extreme"),
         "is_control": False,
     },
     "ext_0001_L6809_s57_low_mu_low_r_mu01_r0001": {
@@ -201,8 +320,8 @@ PRESET_REGISTRY: dict[str, dict[str, Any]] = {
         "label": "ext_0001 — Extreme 0.2x Mu + 0.2x Recomb (S=57, L=6,809 bp, mu=1e-4, r=0.001)",
         "category": "Out-of-Range Extreme Suite (20% Rate Arm)",
         "description": "Extreme low-diversity, low-recombination alignment (20% rates).",
-        "fasta_path": GT_ROOT / "datasets_extreme" / "ext_0001_L6809_s57_low_mu_low_r_mu01_r0001.fas",
-        "cache_dir": GT_ROOT / "cache_extreme",
+        "fasta_path": resolve_preset_fasta_path("ext_0001_L6809_s57_low_mu_low_r_mu01_r0001.fas", GT_ROOT / "datasets_extreme" / "ext_0001_L6809_s57_low_mu_low_r_mu01_r0001.fas"),
+        "cache_dir": resolve_preset_cache_dir("ext_0001_L6809_s57_low_mu_low_r_mu01_r0001", GT_ROOT / "cache_extreme"),
         "is_control": False,
     },
     "ext_0101_L3291_s27_low_mu_ctrl_mu01_ctrl": {
@@ -210,8 +329,8 @@ PRESET_REGISTRY: dict[str, dict[str, Any]] = {
         "label": "ext_0101 — Extreme Low-Mu Clonal Control (S=27, L=3,291 bp, 0 GT)",
         "category": "Out-of-Range Extreme Suite (Negative Control)",
         "description": "Extreme low-mutation clonal control (r=0.0, 0 true breakpoints).",
-        "fasta_path": GT_ROOT / "datasets_extreme" / "ext_0101_L3291_s27_low_mu_ctrl_mu01_ctrl.fas",
-        "cache_dir": GT_ROOT / "cache_extreme",
+        "fasta_path": resolve_preset_fasta_path("ext_0101_L3291_s27_low_mu_ctrl_mu01_ctrl.fas", GT_ROOT / "datasets_extreme" / "ext_0101_L3291_s27_low_mu_ctrl_mu01_ctrl.fas"),
+        "cache_dir": resolve_preset_cache_dir("ext_0101_L3291_s27_low_mu_ctrl_mu01_ctrl", GT_ROOT / "cache_extreme"),
         "is_control": True,
     },
     "sarbecovirus_aligned": {
@@ -219,7 +338,7 @@ PRESET_REGISTRY: dict[str, dict[str, Any]] = {
         "label": "sarbecovirus_aligned — Empirical Coronavirus Alignment (S=19, L=30,619 bp)",
         "category": "Empirical Viral Alignment (Unlabelled)",
         "description": "19 empirical aligned Sarbecovirus genomes (30,619 bp) with gaps/ambiguities.",
-        "fasta_path": WORKSPACE_ROOT / "sarbecovirus_aligned.fasta",
+        "fasta_path": resolve_preset_fasta_path("sarbecovirus_aligned.fasta", WORKSPACE_ROOT / "sarbecovirus_aligned.fasta"),
         "cache_dir": None,
         "is_control": False,
     },
@@ -335,9 +454,13 @@ class GTTransformerInferenceEngine(BaseInferenceEngine):
             "sequences": seq_rows,
         }
 
+    def _discover_checkpoints(self) -> dict[str, dict[str, Any]]:
+        return discover_available_checkpoints()
+
     def list_checkpoints(self) -> list[dict[str, Any]]:
+        registry = self._discover_checkpoints()
         out = []
-        for ckpt_id, meta in CHECKPOINT_REGISTRY.items():
+        for ckpt_id, meta in registry.items():
             p = Path(meta["path"])
             if p.exists():
                 out.append(
@@ -347,8 +470,10 @@ class GTTransformerInferenceEngine(BaseInferenceEngine):
                         "description": meta["description"],
                         "recommended": meta["recommended"],
                         "path": str(p),
+                        "source": meta.get("source", "local"),
                     }
                 )
+        out.sort(key=lambda x: (not x["recommended"], x["id"]))
         return out
 
     def list_presets(self) -> list[dict[str, Any]]:
@@ -400,7 +525,8 @@ class GTTransformerInferenceEngine(BaseInferenceEngine):
 
     def warmup(self, checkpoint_id: str = "ckpt_N10000_extreme") -> None:
         """Load the default checkpoint and pre-compile the static-shape JAX score function."""
-        if checkpoint_id not in CHECKPOINT_REGISTRY or not Path(CHECKPOINT_REGISTRY[checkpoint_id]["path"]).exists():
+        registry = self._discover_checkpoints()
+        if checkpoint_id not in registry or not Path(registry[checkpoint_id]["path"]).exists():
             avail = self.list_checkpoints()
             if not avail:
                 return
@@ -412,9 +538,10 @@ class GTTransformerInferenceEngine(BaseInferenceEngine):
         if checkpoint_id in self._ckpt_cache:
             return self._ckpt_cache[checkpoint_id]
 
-        if checkpoint_id not in CHECKPOINT_REGISTRY:
-            raise ValueError(f"Unknown checkpoint '{checkpoint_id}'.")
-        ckpt_path = Path(CHECKPOINT_REGISTRY[checkpoint_id]["path"])
+        registry = self._discover_checkpoints()
+        if checkpoint_id not in registry:
+            raise ValueError(f"Unknown checkpoint '{checkpoint_id}'. Available: {list(registry.keys())}")
+        ckpt_path = Path(registry[checkpoint_id]["path"])
         if not ckpt_path.exists():
             raise ValueError(f"Checkpoint file not found on disk: {ckpt_path}")
 

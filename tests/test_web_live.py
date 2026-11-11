@@ -39,7 +39,8 @@ class TestLiveWebWorkbench(unittest.TestCase):
 
     def test_02_alignment_window_and_permutation_collapse(self) -> None:
         """Real alignment vs column-shuffled alignment proves predictions come from real linkage."""
-        aln_path = (
+        local_aln = Path(__file__).resolve().parents[1] / "sample_data" / "d048_L4577_s79_r001.fas"
+        aln_path = local_aln if local_aln.exists() else (
             Path(__file__).resolve().parents[4]
             / "WINDOWS_RDP5_PACKAGE"
             / "01_ALIGNMENTS"
@@ -94,7 +95,8 @@ class TestLiveWebWorkbench(unittest.TestCase):
 
     def test_03_clonal_negative_control_specificity(self) -> None:
         """Unseen 10k clonal negative control yields 0 consolidated events."""
-        ctrl_path = (
+        local_ctrl = Path(__file__).resolve().parents[1] / "sample_data" / "d00005_L7268_s23_ctrl.fas"
+        ctrl_path = local_ctrl if local_ctrl.exists() else (
             Path(__file__).resolve().parents[2]
             / "datasets_sims"
             / "d00005_L7268_s23_ctrl.fas"

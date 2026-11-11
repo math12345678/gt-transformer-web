@@ -102,13 +102,18 @@ class TestBattery1NullSpecificity(unittest.TestCase):
             ("ext_0076_L4413_s95_high_mu_high_r_mu25_r025", "gt-transformer/datasets_extreme/ext_0076_L4413_s95_high_mu_high_r_mu25_r025.fas"),
         ]
 
+        local_sample_dir = Path(__file__).resolve().parents[1] / "sample_data"
         workspace_root = Path(__file__).resolve().parents[4]
 
         for name, rel_path in aln_targets:
-            aln_file = workspace_root / rel_path
-            if not aln_file.exists():
-                # Try relative to parent directory
-                aln_file = Path(__file__).resolve().parents[2] / rel_path.split("gt-transformer/")[-1]
+            local_aln = local_sample_dir / f"{name}.fas"
+            if local_aln.exists():
+                aln_file = local_aln
+            else:
+                aln_file = workspace_root / rel_path
+                if not aln_file.exists():
+                    # Try relative to parent directory
+                    aln_file = Path(__file__).resolve().parents[2] / rel_path.split("gt-transformer/")[-1]
             if not aln_file.exists():
                 self.skipTest(f"Alignment {rel_path} not found on disk")
 
