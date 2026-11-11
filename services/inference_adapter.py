@@ -70,7 +70,15 @@ from schemas import (  # noqa: E402
 )
 from services.diagnostics import evaluate_predictions_against_ground_truth  # noqa: E402
 from services.fasta_utils import (  # noqa: E402
+    AlignmentValidationError,
+    AllGapSequenceError,
+    BinaryPayloadError,
+    EmptyPayloadError,
+    InsufficientInformativeSitesError,
+    InsufficientSequencesError,
+    UnequalLengthError,
     compute_alignment_base_stats,
+    parse_and_validate_fasta,
     parse_fasta_text,
     parse_ground_truth_payload,
 )
@@ -681,20 +689,35 @@ class GTTransformerInferenceEngine(BaseInferenceEngine):
     def _build_circular_windows_freq(haplo: np.ndarray, window_size: int) -> np.ndarray:
         """Compute (M_tx, window_size, 4) normalized gamete frequency windows.
 
-        Matches `pipeline.circular_pair_embedding(..., window=window_size)` / `S`,
-        and handles `M_tx < window_size` cleanly via circular index wrapping.
+        When M_tx < window_size, applies linear zero-padding to out-of-range
+        offsets to avoid periodic circular wraparound boundary distortion.
         """
         M_tx, S = haplo.shape
         B = haplo.T.astype(np.int8)  # (S, M_tx)
         offs = P._offsets(window_size)
         idx = np.arange(M_tx)
-        X = np.empty((M_tx, len(offs), 4), dtype=np.float32)
+        X = np.zeros((M_tx, len(offs), 4), dtype=np.float32)
         inv_s = np.float32(1.0 / max(S, 1))
-        for pos, d in enumerate(offs):
-            j = (idx + d) % M_tx
-            code = (B[:, idx] << 1) | B[:, j]  # (S, M_tx) in 0..3
-            for g in range(4):
-                X[:, pos, g] = (code == g).sum(axis=0, dtype=np.float32) * inv_s
+
+        if M_tx < window_size:
+            # Linear zero-padding for short alignments
+            for pos, d in enumerate(offs):
+                j = idx + d
+                valid = (j >= 0) & (j < M_tx)
+                if not np.any(valid):
+                    continue
+                valid_idx = idx[valid]
+                valid_j = j[valid]
+                code = (B[:, valid_idx] << 1) | B[:, valid_j]
+                for g in range(4):
+                    X[valid, pos, g] = (code == g).sum(axis=0, dtype=np.float32) * inv_s
+        else:
+            # Standard circular moving window for full-length alignments
+            for pos, d in enumerate(offs):
+                j = (idx + d) % M_tx
+                code = (B[:, idx] << 1) | B[:, j]  # (S, M_tx) in 0..3
+                for g in range(4):
+                    X[:, pos, g] = (code == g).sum(axis=0, dtype=np.float32) * inv_s
         return X
 
     def _score_transformer_static(self, params: Any, cfg: M.Config, score_fn: Any, X: np.ndarray) -> np.ndarray:
@@ -731,13 +754,19 @@ class GTTransformerInferenceEngine(BaseInferenceEngine):
 
         # Resolve alignment input (uploaded FASTA vs preset FASTA file)
         is_known_control = False
-        if fasta_text and fasta_text.strip():
+        if fasta_text is not None:
+            if not fasta_text.strip():
+                raise EmptyPayloadError("Empty alignment payload")
             ds_name = (fasta_filename or "uploaded_alignment.fasta").rsplit(".", 1)[0]
             source_type = "upload"
             raw_fasta_str = fasta_text
             preset_cache_dir = None
         else:
-            pid = preset_id if (preset_id in PRESET_REGISTRY) else "d005_L3536_s96_r001"
+            if not preset_id:
+                raise EmptyPayloadError("Empty alignment payload")
+            if preset_id not in PRESET_REGISTRY:
+                raise ValueError(f"Unknown preset alignment ID: '{preset_id}'")
+            pid = preset_id
             pmeta = PRESET_REGISTRY[pid]
             fpath = Path(pmeta["fasta_path"])
             if not fpath.exists():
@@ -751,11 +780,9 @@ class GTTransformerInferenceEngine(BaseInferenceEngine):
         # We start an outer timing recorder once dimensions are known; measure stage 1 directly
         import time
         t_s1_start = time.perf_counter()
-        names, seqs = parse_fasta_text(raw_fasta_str)
+        names, seqs, is_rna, gap_status = parse_and_validate_fasta(raw_fasta_str)
         S = len(seqs)
         L = len(seqs[0])
-        if S < 4:
-            raise ValueError(f"Alignment has only {S} sequences; at least 4 sequences are required.")
 
         t_s1_ms = (time.perf_counter() - t_s1_start) * 1000.0
         gc_pct, ambig_pct = compute_alignment_base_stats(seqs)
@@ -766,16 +793,11 @@ class GTTransformerInferenceEngine(BaseInferenceEngine):
         t_s2_start = time.perf_counter()
         kept, cols, origin, info_mode = self._select_informative_and_binarise(seqs, config.null_policy)
         if len(kept) < 10:
-            raise ValueError(
-                f"Alignment '{ds_name}' has only {len(kept)} parsimony-informative sites "
-                "(>= 10 required after filtering heavily gapped columns and singletons)."
-            )
+            raise InsufficientInformativeSitesError(found=len(kept), required=10)
         maps = P.build_maps(origin, L)
         M_tx = len(cols)
         if M_tx < 10:
-            raise ValueError(
-                f"Alignment '{ds_name}' has only {M_tx} columns after '{config.null_policy}' binarisation."
-            )
+            raise InsufficientInformativeSitesError(found=M_tx, required=10)
         haplo = np.array([[1 if v == "1" else 0 for v in col] for col in cols], dtype=np.uint8)
         t_s2_ms = (time.perf_counter() - t_s2_start) * 1000.0
 
@@ -796,6 +818,7 @@ class GTTransformerInferenceEngine(BaseInferenceEngine):
             if info_mode == "strict_acgt"
             else "parsimony-informative sites (gap-tolerant fallback)"
         )
+        notes_rna = ", is_rna=True (U->T normalized)" if is_rna else ""
         recorder._stages_raw.append(
             {
                 "stage_id": "parse_filter",
@@ -805,7 +828,7 @@ class GTTransformerInferenceEngine(BaseInferenceEngine):
                 "items_unit": "bp",
                 "throughput": round(L / max(t_s1_ms / 1000.0, 1e-6), 1),
                 "throughput_unit": "bp/s",
-                "notes": f"{S} sequences × {L:,} bp parsed (GC={gc_pct}%, non-ACGT={ambig_pct}%)",
+                "notes": f"{S} sequences × {L:,} bp parsed (GC={gc_pct}%, non-ACGT={ambig_pct}%{notes_rna})",
             }
         )
         recorder._stages_raw.append(
@@ -998,15 +1021,24 @@ class GTTransformerInferenceEngine(BaseInferenceEngine):
             )
 
         warnings_list: list[str] = []
+        if is_rna:
+            warnings_list.append("RNA input detected (U->T normalized)")
+        if info_mode == "gap_tolerant":
+            warnings_list.append("Gap-tolerant fallback engaged (alignment columns contain > 0% and <= 25% gaps)")
         if M_tx < 314:
             warnings_list.append(
-                f"Alignment length ({M_tx} transformed cols) is shorter than model window (W=314); "
-                "transformer inference operated with zero-padding; local heuristic prioritized."
+                f"Alignment has M_tx={M_tx} < 314 informative sites (linear zero-padding applied; heuristic-only). "
+                f"Alignment length ({M_tx} transformed cols) is shorter than model window (W=314); local heuristic prioritized."
             )
         if any(ev.signal_attribution == "flank_kl_heuristic_only" for ev in events):
             warnings_list.append(
                 "One or more predicted events rely solely on local flanking KL heuristic "
                 "(negative or subthreshold transformer logit)."
+            )
+        if any(ev.tf_logit < 0.0 for ev in events):
+            warnings_list.append(
+                "Out-of-distribution signal: one or more predicted events have negative transformer logits (P(bp) < 0.50); "
+                "local flanking KL heuristic overrides model uncertainty."
             )
         if max_pairwise_id < 0.45:
             warnings_list.append(
@@ -1030,6 +1062,7 @@ class GTTransformerInferenceEngine(BaseInferenceEngine):
                 sequence_names=names,
                 gc_content_pct=gc_pct,
                 ambiguity_pct=ambig_pct,
+                is_rna=is_rna,
             ),
             timings=timings,
             consolidated_events=events,
@@ -1240,11 +1273,10 @@ class GTTransformerInferenceEngine(BaseInferenceEngine):
                                 continue
 
                         # Short / low-polymorphism alignments (M_tx < 314):
-                        # If tf_peak < 0.0 or local_max_tf < config.tf_logit_thresh, require z >= 10.5 and best_sw >= 2.0.
+                        # Transformer operates with zero-padding (heuristic-only); require robust heuristic evidence.
                         if M_tx < 314:
-                            if tf_peak < 0.0 or local_max_tf < config.tf_logit_thresh:
-                                if z_val < 10.5 or best_sw < 2.0:
-                                    continue
+                            if z_val < 10.5 or best_sw < 2.0:
+                                continue
                         else:
                             # Marginal KL peaks (z < 8.0) on full-length alignments:
                             # Require local transformer logit >= config.tf_logit_thresh or best_sw >= 1.0.

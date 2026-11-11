@@ -16,11 +16,16 @@ from datetime import datetime, timezone
 from typing import Any, Optional
 
 from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
-from fastapi.responses import FileResponse, HTMLResponse, PlainTextResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, PlainTextResponse
 from fastapi.staticfiles import StaticFiles
 
 from schemas import FeedbackAnnotation, InferenceConfig, InferenceResponse
 from services.benchmarks import load_benchmark_summaries
+from services.fasta_utils import (
+    AlignmentValidationError,
+    BinaryPayloadError,
+    EmptyPayloadError,
+)
 from services.inference_adapter import GTTransformerInferenceEngine
 from services.timing import TimingHistoryStore
 
@@ -49,6 +54,30 @@ app = FastAPI(
     version="1.0.0",
     lifespan=lifespan,
 )
+
+
+@app.exception_handler(AlignmentValidationError)
+async def alignment_validation_handler(request: Request, exc: AlignmentValidationError):
+    return JSONResponse(status_code=exc.status_code, content={"detail": str(exc)})
+
+
+@app.exception_handler(ValueError)
+async def value_error_handler(request: Request, exc: ValueError):
+    detail = str(exc)
+    status_code = (
+        422
+        if any(
+            k in detail
+            for k in (
+                "identical lengths",
+                "at least 4 sequences",
+                "polymorphic sites",
+                "gap characters",
+            )
+        )
+        else 400
+    )
+    return JSONResponse(status_code=status_code, content={"detail": detail})
 
 app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 
@@ -152,9 +181,13 @@ async def run_inference_endpoint(
     fasta_filename: Optional[str] = None
     gt_text: Optional[str] = None
     gt_filename: Optional[str] = None
+    has_upload = False
 
     if "application/json" in content_type:
-        body = await request.json()
+        try:
+            body = await request.json()
+        except Exception:
+            raise HTTPException(status_code=400, detail="Invalid JSON payload")
         preset_id = body.get("preset_id", preset_id)
         checkpoint = body.get("checkpoint", checkpoint)
         scoring_mode = body.get("scoring_mode", scoring_mode)
@@ -167,15 +200,26 @@ async def run_inference_endpoint(
         merge_radius_bp = int(body.get("merge_radius_bp", merge_radius_bp))
         eval_tolerance_bp = int(body.get("eval_tolerance_bp", eval_tolerance_bp))
         fasta_text = body.get("fasta_text") or body.get("pasted_fasta")
+        if "fasta_text" in body or "pasted_fasta" in body:
+            has_upload = True
         fasta_filename = body.get("fasta_filename")
         gt_text = body.get("gt_text") or body.get("pasted_gt")
         gt_filename = body.get("gt_filename")
     else:
         if fasta_file is not None and fasta_file.filename:
+            has_upload = True
             raw_bytes = await fasta_file.read()
-            fasta_text = raw_bytes.decode("utf-8", errors="replace")
+            if len(raw_bytes.strip()) == 0:
+                raise HTTPException(status_code=400, detail="Empty alignment payload")
+            if b"\x00" in raw_bytes:
+                raise HTTPException(status_code=400, detail="Binary or non-text alignment content detected")
+            try:
+                fasta_text = raw_bytes.decode("utf-8")
+            except UnicodeDecodeError:
+                raise HTTPException(status_code=400, detail="Binary or non-text alignment content detected")
             fasta_filename = fasta_file.filename
-        elif pasted_fasta and pasted_fasta.strip():
+        elif pasted_fasta is not None:
+            has_upload = True
             fasta_text = pasted_fasta
             fasta_filename = "pasted_alignment.fasta"
 
@@ -186,6 +230,13 @@ async def run_inference_endpoint(
         elif pasted_gt and pasted_gt.strip():
             gt_text = pasted_gt
             gt_filename = "pasted_ground_truth.txt"
+
+    if has_upload and (fasta_text is None or not fasta_text.strip()):
+        raise HTTPException(status_code=400, detail="Empty alignment payload")
+    if not has_upload and not preset_id:
+        raise HTTPException(status_code=400, detail="Empty alignment payload")
+    if fasta_text and "\x00" in fasta_text:
+        raise HTTPException(status_code=400, detail="Binary or non-text alignment content detected")
 
     try:
         cfg = InferenceConfig(
@@ -208,8 +259,31 @@ async def run_inference_endpoint(
             gt_text=gt_text,
             gt_filename=gt_filename,
         )
+    except HTTPException:
+        raise
+    except AlignmentValidationError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc
     except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+        detail = str(exc)
+        status_code = (
+            422
+            if any(
+                k in detail
+                for k in (
+                    "identical lengths",
+                    "at least 4 sequences",
+                    "polymorphic sites",
+                    "gap characters",
+                )
+            )
+            else 400
+        )
+        raise HTTPException(status_code=status_code, detail=detail) from exc
+    except Exception as exc:
+        import logging
+
+        logging.getLogger("uvicorn.error").exception("Unhandled inference exception")
+        raise HTTPException(status_code=500, detail=f"Internal inference error: {str(exc)}") from exc
 
 
 @app.get("/api/timings")

@@ -8,7 +8,7 @@
 </head>
 <body>
   <!-- Classic RDP5-Style Desktop Toolbar -->
-  <header class="rdp-toolbar">
+  <header class="rdp-toolbar app-toolbar">
     <div class="toolbar-buttons">
       <button type="button" id="btnOpenFasta" class="tb-btn" title="Upload or paste FASTA alignment & ground truth">
         Open
@@ -44,6 +44,15 @@
       <span id="engineStatusBadge" class="status-box">live · 570,881 params</span>
     </div>
   </header>
+
+  <!-- Global Inline Error Banner (Non-blocking replacement for alert dialogs) -->
+  <div id="globalErrorBanner" class="global-error-banner hidden" role="alert">
+    <div class="banner-content">
+      <span class="banner-icon">⚠️</span>
+      <span id="globalErrorMessage" class="banner-text"></span>
+    </div>
+    <button type="button" id="btnDismissGlobalError" class="banner-dismiss" title="Dismiss error">&times;</button>
+  </div>
 
   <!-- Full-Length Alignment & Informative-Site Overview Strip (like RDP5 top magenta track) -->
   <div class="overview-strip-wrap">
@@ -103,6 +112,7 @@
             <span><strong>Prec / F1:</strong> <span id="sumPrecision">—</span></span>
             <span><strong>Med Err:</strong> <span id="sumMedErr">—</span></span>
             <span><strong>Time:</strong> <span id="sumTime">—</span></span>
+            <span id="sumWarningsTag" class="sum-warnings-tag hidden" title="Click to view warnings in Diagnostics tab"></span>
           </div>
           <div class="pane-subhead" id="presetMetaLine"></div>
           <div class="table-scroll">
@@ -110,7 +120,7 @@
               <thead>
                 <tr>
                   <th>Event #</th>
-                  <th>Method</th>
+                  <th>Signal Attribution</th>
                   <th>BP (orig)</th>
                   <th>Span (orig)</th>
                   <th>Peaks</th>
@@ -152,6 +162,13 @@
         <!-- TAB: TP / FP / FN Diagnostics -->
         <div id="tab-diagnostics" class="tab-content hidden">
           <div class="pane-subhead" id="diagVerdictBanner"></div>
+          <div id="diagnosticsWarningsBox" class="diag-warnings-box hidden">
+            <div class="diag-warnings-header">
+              <span class="warn-icon">⚠️</span>
+              <strong>Out-of-Distribution &amp; Diagnostic Warnings (<span id="diagWarningsCount">0</span>)</strong>
+            </div>
+            <ul id="diagWarningsList" class="diag-warnings-list"></ul>
+          </div>
           <div class="table-scroll">
             <table class="rdp-table" id="toleranceMetricsTable">
               <thead>
@@ -351,7 +368,14 @@
         <button type="button" id="btnCloseOpenModal" class="mini-btn">✕</button>
       </div>
       <form id="uploadForm">
-        <div class="modal-content">
+        <div id="uploadModalErrorBanner" class="modal-error-banner hidden" role="alert">
+          <div class="banner-content">
+            <span class="banner-icon">⚠️</span>
+            <span id="uploadModalErrorMessage" class="banner-text"></span>
+          </div>
+          <button type="button" id="btnDismissUploadError" class="banner-dismiss" title="Dismiss error">&times;</button>
+        </div>
+        <div class="modal-content modal-body">
           <label class="side-lbl" for="fastaFileInput">Upload FASTA file (.fasta, .fas, .fa)</label>
           <input type="file" id="fastaFileInput" accept=".fasta,.fas,.fa,.txt" class="win-file" />
 

@@ -236,6 +236,7 @@ class AlignmentMetadata(BaseModel):
     sequence_names: list[str]
     gc_content_pct: float
     ambiguity_pct: float
+    is_rna: bool = False
 
 
 class InferenceResponse(BaseModel):

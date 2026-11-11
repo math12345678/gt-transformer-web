@@ -649,3 +649,133 @@ code,
   overflow: auto;
   margin-top: 3px;
 }
+
+/* --------------------------------------------------------------------------
+   Inline Error Banners & Diagnostic Warnings (Win32 Desktop Style)
+   -------------------------------------------------------------------------- */
+.global-error-banner {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 5px 10px;
+  background-color: #fce8e6;
+  border-bottom: 1px solid #c9736d;
+  color: #7a1610;
+  font-size: 11.5px;
+  font-family: inherit;
+  z-index: 100;
+}
+
+.modal-error-banner {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 5px 10px;
+  margin: 6px 12px 0 12px;
+  background-color: #fce8e6;
+  border: 1px solid #c9736d;
+  color: #7a1610;
+  font-size: 11.5px;
+}
+
+.banner-content {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.banner-icon {
+  font-size: 13px;
+  flex-shrink: 0;
+}
+
+.banner-text {
+  font-weight: 600;
+}
+
+.banner-dismiss {
+  background: transparent;
+  border: 1px solid #c9736d;
+  color: #7a1610;
+  font-size: 13px;
+  font-weight: bold;
+  cursor: pointer;
+  padding: 0 4px;
+  line-height: 1;
+}
+
+.banner-dismiss:hover {
+  background-color: #f7d2cf;
+}
+
+.diag-warnings-box {
+  background-color: #fef3db;
+  border: 1px solid #c79a44;
+  color: #5c3c00;
+  padding: 6px 10px;
+  margin-bottom: 8px;
+  font-size: 11.5px;
+}
+
+.diag-warnings-header {
+  font-weight: 700;
+  margin-bottom: 4px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.diag-warnings-list {
+  margin: 0 0 0 18px;
+  padding: 0;
+}
+
+.diag-warnings-list li {
+  margin-bottom: 2px;
+}
+
+.sum-warnings-tag {
+  background-color: #fef3db;
+  border: 1px solid #c79a44;
+  color: #5c3c00;
+  font-weight: 700;
+  padding: 1px 6px;
+  cursor: pointer;
+}
+
+.sum-warnings-tag:hover {
+  background-color: #fde8be;
+}
+
+.tag-attribution {
+  display: inline-block;
+  padding: 1px 5px;
+  font-size: 10.5px;
+  font-weight: 600;
+  border: 1px solid #7f9db9;
+  white-space: nowrap;
+}
+
+.tag-hybrid_flank {
+  background-color: #e6f4ea;
+  border-color: #68a678;
+  color: #135224;
+}
+
+.tag-flank_kl_heuristic_only {
+  background-color: #fef3db;
+  border-color: #c79a44;
+  color: #5c3c00;
+}
+
+.tag-transformer_corroborated {
+  background-color: #e6eef8;
+  border-color: #7f9db9;
+  color: #0c3d75;
+}
+
+.tag-standalone_tf {
+  background-color: #f5eeff;
+  border-color: #9c7fcf;
+  color: #4a1d82;
+}

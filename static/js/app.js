@@ -63,6 +63,34 @@
       .replace(/"/g, "&quot;");
   }
 
+  function showGlobalError(message) {
+    const banner = el("globalErrorBanner");
+    const msg = el("globalErrorMessage");
+    if (banner && msg) {
+      msg.textContent = message;
+      banner.classList.remove("hidden");
+    }
+  }
+
+  function hideGlobalError() {
+    const banner = el("globalErrorBanner");
+    if (banner) banner.classList.add("hidden");
+  }
+
+  function showUploadError(message) {
+    const banner = el("uploadModalErrorBanner");
+    const msg = el("uploadModalErrorMessage");
+    if (banner && msg) {
+      msg.textContent = message;
+      banner.classList.remove("hidden");
+    }
+  }
+
+  function hideUploadError() {
+    const banner = el("uploadModalErrorBanner");
+    if (banner) banner.classList.add("hidden");
+  }
+
   async function init() {
     bindUIEvents();
     await loadPresetsAndConfig();
@@ -90,6 +118,10 @@
       updateIniPreview();
     });
 
+    // Error banners
+    el("btnDismissGlobalError").addEventListener("click", hideGlobalError);
+    el("btnDismissUploadError").addEventListener("click", hideUploadError);
+
     // Tab switching
     document.querySelectorAll(".rdp-tab").forEach((btn) => {
       btn.addEventListener("click", () => switchTab(btn.getAttribute("data-tab")));
@@ -102,8 +134,14 @@
     el("btnExportJson").addEventListener("click", exportFullJson);
 
     // Open / Upload Modal
-    const openUploadModal = () => el("openModal").classList.remove("hidden");
-    const closeUploadModal = () => el("openModal").classList.add("hidden");
+    const openUploadModal = () => {
+      hideUploadError();
+      el("openModal").classList.remove("hidden");
+    };
+    const closeUploadModal = () => {
+      hideUploadError();
+      el("openModal").classList.add("hidden");
+    };
     el("btnOpenFasta").addEventListener("click", openUploadModal);
     el("btnOpenSide").addEventListener("click", openUploadModal);
     el("btnCloseOpenModal").addEventListener("click", closeUploadModal);
@@ -125,12 +163,13 @@
     });
     el("uploadForm").addEventListener("submit", async (e) => {
       e.preventDefault();
+      hideUploadError();
       state.uploadedFastaFile = el("fastaFileInput").files[0] || null;
       state.uploadedPastedFasta = el("pastedFastaInput").value.trim();
       state.uploadedGtFile = el("gtFileInput").files[0] || null;
       state.uploadedPastedGt = el("pastedGtInput").value.trim();
       if (!state.uploadedFastaFile && !state.uploadedPastedFasta) {
-        alert("Choose a FASTA file or paste FASTA sequence text.");
+        showUploadError("Choose a FASTA file or paste FASTA sequence text.");
         return;
       }
       const uploadName = state.uploadedFastaFile
@@ -300,10 +339,17 @@
         }
       }
 
-      const res = await fetch("/api/infer", { method: "POST", body: fd });
+      hideGlobalError();
+      let res;
+      try {
+        res = await fetch("/api/infer", { method: "POST", body: fd });
+      } catch (netErr) {
+        showGlobalError("Network error: Unable to connect to inference server (" + (netErr.message || "offline") + ")");
+        return;
+      }
       if (!res.ok) {
-        const err = await res.json().catch(() => ({ detail: "Inference failed" }));
-        alert("Error: " + (err.detail || res.statusText));
+        const err = await res.json().catch(() => ({ detail: `HTTP ${res.status}: ${res.statusText}` }));
+        showGlobalError(err.detail || `Inference failed with status ${res.status}`);
         return;
       }
 
@@ -361,6 +407,19 @@
       el("sumMedErr").textContent = "—";
     }
     el("sumTime").textContent = `${tim.total_ms.toFixed(0)} ms (${fmtInt(Math.round(tim.throughput_bp_per_sec))} bp/s)`;
+
+    const warnings = run.warnings || [];
+    const wBadge = el("sumWarningsTag");
+    if (wBadge) {
+      if (warnings.length > 0) {
+        wBadge.textContent = `⚠️ ${warnings.length} OOD Warning${warnings.length > 1 ? "s" : ""}`;
+        wBadge.title = warnings.join("\n") + "\n(Click to view in Diagnostics tab)";
+        wBadge.classList.remove("hidden");
+        wBadge.onclick = () => switchTab("tab-diagnostics");
+      } else {
+        wBadge.classList.add("hidden");
+      }
+    }
 
     el("presetMetaLine").textContent =
       `${aln.dataset_name} (${aln.source_type}) | mode=${run.config.scoring_mode} | ckpt=${run.config.checkpoint} | GC=${aln.gc_content_pct}%`;
@@ -518,10 +577,18 @@
         const sel = ev.event_id === state.selectedEventId ? ' class="selected-row"' : "";
         const lead = ev.recombinants && ev.recombinants[0] ? ev.recombinants[0] : null;
         const parentsStr = lead ? `${lead.ext_parent_left} → ${lead.ext_parent_right}` : "—";
+        const attrLabels = {
+          "hybrid_flank": "Hybrid",
+          "flank_kl_heuristic_only": "flank_kl (heuristic)",
+          "transformer_corroborated": "Corroborated",
+          "standalone_tf": "Transformer",
+        };
+        const attrText = attrLabels[ev.signal_attribution] || ev.signal_attribution;
+        const attrTag = `<span class="tag-attribution tag-${escapeHtml(ev.signal_attribution)}" title="${escapeHtml(ev.attribution_note || '')}">${escapeHtml(attrText)}</span>`;
         return (
           `<tr${sel} data-row-event="${ev.event_id}">` +
           `<td class="num"><strong>${ev.event_id}</strong></td>` +
-          `<td class="mono">${escapeHtml(run.config.scoring_mode)}</td>` +
+          `<td class="mono">${attrTag}</td>` +
           `<td class="num"><strong>${fmtInt(ev.most_plausible_bp_orig)}</strong></td>` +
           `<td class="mono">${fmtInt(ev.span_orig_start)}..${fmtInt(ev.span_orig_end)}</td>` +
           `<td class="num">${ev.n_peaks_consolidated}</td>` +
@@ -616,6 +683,21 @@
 
     el("diagVerdictBanner").textContent = (diag.summary_notes || []).join(" ");
 
+    const warnings = run.warnings || [];
+    const wBox = el("diagnosticsWarningsBox");
+    const wList = el("diagWarningsList");
+    const wCount = el("diagWarningsCount");
+    if (wBox && wList) {
+      if (warnings.length > 0) {
+        if (wCount) wCount.textContent = warnings.length;
+        wList.innerHTML = warnings.map((w) => `<li>${escapeHtml(w)}</li>`).join("");
+        wBox.classList.remove("hidden");
+      } else {
+        wList.innerHTML = "";
+        wBox.classList.add("hidden");
+      }
+    }
+
     const tolBody = el("toleranceMetricsBody");
     if (!diag.has_ground_truth || diag.tolerance_metrics.length === 0) {
       tolBody.innerHTML = `<tr><td colspan="10">No ground-truth log loaded. Use Open FASTA... to attach a SantaSim .txt, .json, or .csv ground-truth log.</td></tr>`;
@@ -686,6 +768,9 @@
           const gtStr = ev.matched_gt_bp !== null ? `${fmtInt(ev.matched_gt_bp)}` : "—";
           const errStr = ev.bp_error !== null ? `${ev.bp_error}` : "—";
           const targetId = `Event #${ev.event_id} (${ev.most_plausible_bp_orig} bp)`;
+          const explStr = ev.attribution_note
+            ? `${ev.diagnostic_explanation ? ev.diagnostic_explanation + ' | ' : ''}${ev.attribution_note}`
+            : ev.diagnostic_explanation;
           return (
             `<tr>` +
             `<td>${st}</td>` +
@@ -694,7 +779,7 @@
             `<td class="mono">${ev.score_z.toFixed(2)} / ${ev.tf_logit.toFixed(2)}</td>` +
             `<td class="mono">${gtStr}</td>` +
             `<td class="num">${errStr}</td>` +
-            `<td>${escapeHtml(ev.diagnostic_explanation)}</td>` +
+            `<td>${escapeHtml(explStr)}</td>` +
             `<td><button type="button" class="btn-link" data-ann-type="predicted_event" data-ann-id="${escapeHtml(targetId)}">Note</button></td>` +
             `</tr>`
           );

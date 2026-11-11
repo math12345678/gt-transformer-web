@@ -11,11 +11,232 @@ import re
 from typing import Any
 
 
+GAP_CHARACTERS = set("-.~?")
+
+
+class AlignmentValidationError(ValueError):
+    """Base exception for alignment validation errors carrying HTTP status codes."""
+
+    def __init__(self, detail: str, status_code: int = 422):
+        super().__init__(detail)
+        self.detail = detail
+        self.status_code = status_code
+
+
+class EmptyPayloadError(AlignmentValidationError):
+    """HTTP 400: Empty or whitespace-only alignment input."""
+
+    def __init__(self, detail: str = "Empty alignment payload"):
+        super().__init__(detail=detail, status_code=400)
+
+
+class BinaryPayloadError(AlignmentValidationError):
+    """HTTP 400: Binary, null-byte, or non-text alignment content."""
+
+    def __init__(self, detail: str = "Binary or non-text alignment content detected"):
+        super().__init__(detail=detail, status_code=400)
+
+
+class UnequalLengthError(AlignmentValidationError):
+    """HTTP 422: Sequences have unequal lengths (unaligned)."""
+
+    def __init__(self, detail: str = "Alignment sequences must have identical lengths"):
+        super().__init__(detail=detail, status_code=422)
+
+
+class InsufficientSequencesError(AlignmentValidationError):
+    """HTTP 422: Alignment has fewer than 4 sequences."""
+
+    def __init__(self, detail: str = "Alignment requires at least 4 sequences for recombination detection"):
+        super().__init__(detail=detail, status_code=422)
+
+
+class InsufficientInformativeSitesError(AlignmentValidationError):
+    """HTTP 422: Alignment has fewer than 10 informative polymorphic sites."""
+
+    def __init__(self, found: int, required: int = 10):
+        super().__init__(
+            detail=f"Insufficient informative polymorphic sites (found {found}, required >= {required}; only {found} parsimony-informative sites)",
+            status_code=422,
+        )
+
+
+class AllGapSequenceError(AlignmentValidationError):
+    """HTTP 422: A sequence contains only gap characters."""
+
+    def __init__(self, seq_name: str):
+        super().__init__(
+            detail=f"Sequence '{seq_name}' contains only gap characters",
+            status_code=422,
+        )
+
+
+def count_parsimony_informative_sites(
+    seqs: list[str],
+    max_gap_frac: float = 0.25,
+) -> tuple[int, str]:
+    """Count informative polymorphic sites across aligned sequences.
+
+    Returns (count, mode) where mode is 'strict_acgt' or 'gap_tolerant'.
+    """
+    S = len(seqs)
+    L = len(seqs[0]) if seqs else 0
+    acgt = set("ACGT")
+    strict_count = 0
+    gap_count = 0
+
+    for c in range(L):
+        chars = [s[c] for s in seqs]
+        non_acgt = sum(1 for ch in chars if ch not in acgt)
+        # 1. Strict ACGT check
+        if non_acgt == 0:
+            counts: dict[str, int] = {}
+            for ch in chars:
+                counts[ch] = counts.get(ch, 0) + 1
+            if len(counts) >= 2 and sorted(counts.values(), reverse=True)[1] >= 2:
+                strict_count += 1
+        # 2. Gap-tolerant check
+        if non_acgt / max(S, 1) <= max_gap_frac:
+            acgt_counts: dict[str, int] = {}
+            for ch in chars:
+                if ch in acgt:
+                    acgt_counts[ch] = acgt_counts.get(ch, 0) + 1
+            ordered = sorted(acgt_counts.values(), reverse=True)
+            if len(ordered) >= 2 and ordered[1] >= 2:
+                gap_count += 1
+
+    if strict_count >= 30:
+        return strict_count, "strict_acgt"
+    if gap_count > strict_count:
+        return gap_count, "gap_tolerant"
+    return strict_count, "strict_acgt"
+
+
+def parse_and_validate_fasta(
+    fasta_text: str | bytes,
+    max_gap_frac: float = 0.25,
+    min_sequences: int = 4,
+    min_informative: int = 10,
+) -> tuple[list[str], list[str], bool, dict[str, Any]]:
+    """Parse and rigorously validate FASTA alignment payload.
+
+    Returns:
+        (headers, seqs, is_rna, gap_status)
+    Raises:
+        EmptyPayloadError: Payload is empty or whitespace (HTTP 400).
+        BinaryPayloadError: Null bytes or non-text binary data detected (HTTP 400).
+        AlignmentValidationError: Invalid FASTA structure (HTTP 400/422).
+        UnequalLengthError: Sequences have unequal lengths (HTTP 422).
+        InsufficientSequencesError: Panel size S < min_sequences (HTTP 422).
+        InsufficientInformativeSitesError: Informative sites < min_informative (HTTP 422).
+        AllGapSequenceError: Any sequence contains only gap characters (HTTP 422).
+    """
+    if fasta_text is None:
+        raise EmptyPayloadError("Empty alignment payload")
+
+    if isinstance(fasta_text, bytes):
+        if len(fasta_text.strip()) == 0:
+            raise EmptyPayloadError("Empty alignment payload")
+        if b"\x00" in fasta_text:
+            raise BinaryPayloadError("Binary or non-text alignment content detected")
+        try:
+            text = fasta_text.decode("utf-8")
+        except UnicodeDecodeError:
+            raise BinaryPayloadError("Binary or non-text alignment content detected")
+    else:
+        if len(fasta_text.strip()) == 0:
+            raise EmptyPayloadError("Empty alignment payload")
+        if "\x00" in fasta_text:
+            raise BinaryPayloadError("Binary or non-text alignment content detected")
+        text = fasta_text
+
+    # Non-printable control character check (excluding \r, \n, \t)
+    if any(ord(c) < 32 and c not in "\r\n\t" for c in text):
+        raise BinaryPayloadError("Binary or non-text alignment content detected")
+
+    names: list[str] = []
+    seqs_parts: list[list[str]] = []
+    cur: list[str] | None = None
+    saw_u = False
+
+    for raw_line in text.splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith(";"):
+            continue
+        if line.startswith(">"):
+            header = line[1:].strip() or f"seq_{len(names)}"
+            names.append(header)
+            seqs_parts.append([])
+            cur = seqs_parts[-1]
+        else:
+            if cur is None:
+                raise AlignmentValidationError(
+                    "Invalid FASTA format: sequence data encountered before first '>' header.",
+                    status_code=400,
+                )
+            cleaned = re.sub(r"\s+", "", line).upper()
+            if "U" in cleaned:
+                saw_u = True
+                cleaned = cleaned.replace("U", "T")
+            cur.append(cleaned)
+
+    if not names:
+        raise AlignmentValidationError(
+            "No FASTA records ('>' headers) found in alignment.",
+            status_code=400,
+        )
+
+    seqs = ["".join(parts) for parts in seqs_parts]
+    if any(len(s) == 0 for s in seqs):
+        raise AlignmentValidationError(
+            "One or more FASTA records contain an empty sequence.",
+            status_code=422,
+        )
+
+    # 1. Unaligned headers / unequal sequence lengths
+    lengths = {len(s) for s in seqs}
+    if len(lengths) > 1:
+        raise UnequalLengthError("Alignment sequences must have identical lengths")
+
+    # 2. All-gap sequences
+    for name, s in zip(names, seqs):
+        if set(s).issubset(GAP_CHARACTERS):
+            raise AllGapSequenceError(name)
+
+    # 3. Panel size < 4 sequences
+    S = len(seqs)
+    if S < min_sequences:
+        raise InsufficientSequencesError("Alignment requires at least 4 sequences for recombination detection")
+
+    # 4. Informative sites < 10
+    n_inf, mode = count_parsimony_informative_sites(seqs, max_gap_frac=max_gap_frac)
+    if n_inf < min_informative:
+        raise InsufficientInformativeSitesError(found=n_inf, required=min_informative)
+
+    L = len(seqs[0]) if seqs else 0
+    gap_status = {
+        "genome_length_bp": L,
+        "n_sequences": S,
+        "n_informative": n_inf,
+        "mode": mode,
+        "is_rna": saw_u,
+        "max_gap_frac": max_gap_frac,
+    }
+    return names, seqs, saw_u, gap_status
+
+
 def parse_fasta_text(fasta_text: str) -> tuple[list[str], list[str]]:
     """Parse FASTA string into equal-length (sequence_names, sequences).
 
-    Raises ValueError if the input is empty or not valid FASTA.
+    Raises AlignmentValidationError / ValueError if the input is empty or not valid FASTA.
     """
+    if not fasta_text or not fasta_text.strip():
+        raise EmptyPayloadError("Empty alignment payload")
+    if "\x00" in fasta_text:
+        raise BinaryPayloadError("Binary or non-text alignment content detected")
+    if any(ord(c) < 32 and c not in "\r\n\t" for c in fasta_text):
+        raise BinaryPayloadError("Binary or non-text alignment content detected")
+
     names: list[str] = []
     seqs_parts: list[list[str]] = []
     cur: list[str] | None = None
@@ -31,23 +252,33 @@ def parse_fasta_text(fasta_text: str) -> tuple[list[str], list[str]]:
             cur = seqs_parts[-1]
         else:
             if cur is None:
-                raise ValueError(
-                    "Invalid FASTA format: sequence data encountered before first '>' header."
+                raise AlignmentValidationError(
+                    "Invalid FASTA format: sequence data encountered before first '>' header.",
+                    status_code=400,
                 )
             cleaned = re.sub(r"\s+", "", line).upper().replace("U", "T")
             cur.append(cleaned)
 
     if not names:
-        raise ValueError("No FASTA records ('>' headers) found in alignment.")
+        raise AlignmentValidationError(
+            "No FASTA records ('>' headers) found in alignment.",
+            status_code=400,
+        )
 
     seqs = ["".join(parts) for parts in seqs_parts]
     if any(len(s) == 0 for s in seqs):
-        raise ValueError("One or more FASTA records contain an empty sequence.")
+        raise AlignmentValidationError(
+            "One or more FASTA records contain an empty sequence.",
+            status_code=422,
+        )
 
     lengths = {len(s) for s in seqs}
     if len(lengths) > 1:
-        max_len = max(lengths)
-        seqs = [s.ljust(max_len, "N") for s in seqs]
+        raise UnequalLengthError("Alignment sequences must have identical lengths")
+
+    for name, s in zip(names, seqs):
+        if set(s).issubset(GAP_CHARACTERS):
+            raise AllGapSequenceError(name)
 
     return names, seqs
 
