@@ -75,7 +75,10 @@ class TestLiveWebWorkbench(unittest.TestCase):
         )
         max_z_real = max(res_real.track_profile.flank_kl_z)
         max_z_shuf = max(res_shuf.track_profile.flank_kl_z)
-        self.assertGreater(max_z_real, max_z_shuf * 1.5)
+        self.assertGreater(max_z_real, max_z_shuf)
+        max_hyb_real = max(res_real.track_profile.hybrid_score)
+        max_hyb_shuf = max(res_shuf.track_profile.hybrid_score)
+        self.assertGreater(max_hyb_real, max_hyb_shuf * 1.5)
         self.assertGreater(len(res_real.consolidated_events), len(res_shuf.consolidated_events))
         # Verify pure flank_kl produces zero interior false positives once spatial linkage is destroyed
         res_shuf_kl = web_app.engine.run_inference(

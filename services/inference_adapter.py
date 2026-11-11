@@ -229,7 +229,8 @@ PRESET_REGISTRY: dict[str, dict[str, Any]] = {
 def compute_max_pairwise_identity(seqs: list[str], max_sample_cols: int = 5000) -> float:
     """Compute maximum pairwise sequence identity across all sequences in the alignment.
 
-    Used to detect unlinked non-biological random sequences (< 45% identity).
+    Converts sequences to uppercase to prevent case-sensitivity mismatches on soft-masked
+    FASTAs, and evaluates across all sequences without artificial sequence truncation limits.
     """
     S = len(seqs)
     if S < 2:
@@ -245,15 +246,18 @@ def compute_max_pairwise_identity(seqs: list[str], max_sample_cols: int = 5000) 
         sampled_seqs = seqs
         L_eff = L
 
-    arr = np.array([np.frombuffer(s.encode("ascii", errors="replace"), dtype=np.uint8) for s in sampled_seqs])
+    # Case-insensitive ASCII encoding
+    arr = np.array([np.frombuffer(s.upper().encode("ascii", errors="replace"), dtype=np.uint8) for s in sampled_seqs])
     max_id = 0.0
-    sub_S = min(S, 64)
-    for i in range(sub_S - 1):
-        matches = (arr[i : i + 1] == arr[i + 1 : sub_S]).sum(axis=1) / float(L_eff)
+    # Evaluate across all sequences (early-stopping if biological homology >= 99% is found)
+    for i in range(S - 1):
+        matches = (arr[i : i + 1] == arr[i + 1 :]).sum(axis=1) / float(L_eff)
         if len(matches) > 0:
             m = float(matches.max())
             if m > max_id:
                 max_id = m
+            if max_id >= 0.99:
+                break
     return max_id
 
 
@@ -629,7 +633,6 @@ class GTTransformerInferenceEngine(BaseInferenceEngine):
         t_s1_ms = (time.perf_counter() - t_s1_start) * 1000.0
         gc_pct, ambig_pct = compute_alignment_base_stats(seqs)
         max_pairwise_id = compute_max_pairwise_identity(seqs)
-        is_unlinked_random = bool(max_pairwise_id < 0.45)
 
         # Stage 2: Informative-site selection (strict ACGT first, gap-tolerant fallback if <30),
         # binarisation, coordinate maps & haplotype matrix
@@ -738,13 +741,26 @@ class GTTransformerInferenceEngine(BaseInferenceEngine):
                 tf_logits_b = np.zeros(M_tx + 1, dtype=np.float64)
             tf_prob_b = 1.0 / (1.0 + np.exp(-np.clip(tf_logits_b, -10.0, 10.0)))
 
-        # Adaptive bounds: dynamically adapt down to 6 for sensitive edge breakpoint recovery
-        eff_min_seg = min(config.min_seg, max(6, int(M_tx * 0.015)))
+        # Adaptive bounds: dynamically adapt down to 6 for sensitive edge breakpoint recovery while protecting against extreme sub-6-site noise
+        eff_min_seg = max(6, min(config.min_seg, max(6, int(M_tx * 0.01))))
         eff_L_w = min(config.flank_window, max(16, M_tx // 3))
         if config.scoring_mode == "global_kl":
             eff_min_seg_global = min(max(config.min_seg, 200), max(10, M_tx // 4))
         else:
             eff_min_seg_global = eff_min_seg
+
+        # Multi-scale window set scaled to physical sequence length for short tract (>=300 bp) and long tract sensitivity
+        col_density = float(M_tx) / max(float(L), 1.0)
+        w_short = max(24, min(eff_L_w, int(250.0 * col_density)))
+        w_med = max(48, min(eff_L_w, int(500.0 * col_density)))
+        candidate_windows = sorted(list(set([
+            w_short,
+            w_med,
+            eff_L_w,
+        ])))
+        candidate_windows = [w for w in candidate_windows if w >= 16 and w <= eff_L_w]
+        if not candidate_windows:
+            candidate_windows = [eff_L_w]
 
         # Stage 5: Local Flanking KL / Global KL & Permutation Null Calibration
         rng = np.random.default_rng(0)
@@ -759,7 +775,7 @@ class GTTransformerInferenceEngine(BaseInferenceEngine):
                 f"Legacy global KL (min_seg={eff_min_seg_global}, beta={config.beta:g})"
                 if config.scoring_mode == "global_kl"
                 else (
-                    f"Local flank_kl (Lw={eff_L_w}, min_seg={eff_min_seg}, beta={config.beta:g}, 2x col-perm null)"
+                    f"Local flank_kl (windows={candidate_windows}, min_seg={eff_min_seg}, beta={config.beta:g}, 3x col-perm null)"
                     if need_kl
                     else "Skipped global null scan (standalone_tf mode)"
                 )
@@ -769,19 +785,30 @@ class GTTransformerInferenceEngine(BaseInferenceEngine):
                 z_kl, _raw_kl, _null_kl = H.boundary_zscore(
                     haplo, beta=config.beta, min_seg=eff_min_seg_global, kind="kl", rng=rng, n_perm=2
                 )
+                z_by_w = {eff_L_w: z_kl}
+                raw_by_w = {eff_L_w: _raw_kl}
             elif config.scoring_mode in ("hybrid_flank", "flank_kl"):
-                z_kl, _raw_kl, _null_kl = H.boundary_zscore_flank(
-                    haplo,
-                    L_w=eff_L_w,
-                    beta=config.beta,
-                    min_seg=eff_min_seg,
-                    power=1.0,
-                    rng=rng,
-                    n_perm=3,
-                    origin=origin,
-                )
+                z_by_w = {}
+                raw_by_w = {}
+                for w in candidate_windows:
+                    z_w, raw_w, _ = H.boundary_zscore_flank(
+                        haplo,
+                        L_w=w,
+                        beta=config.beta,
+                        min_seg=eff_min_seg,
+                        power=1.0,
+                        rng=np.random.default_rng(0),
+                        n_perm=3,
+                        origin=origin,
+                    )
+                    z_by_w[w] = z_w
+                    raw_by_w[w] = raw_w
+                # Combined multi-scale z profile: elementwise maximum across window scales
+                z_kl = np.maximum.reduce([z_by_w[w] for w in candidate_windows])
             else:
                 z_kl = np.zeros(M_tx + 1, dtype=np.float64)
+                z_by_w = {eff_L_w: z_kl}
+                raw_by_w = {eff_L_w: z_kl}
 
         # Stage 6: Peak Picking, Consolidation & 3-Level Carrier/Parent Attribution
         with recorder.measure_stage(
@@ -802,22 +829,17 @@ class GTTransformerInferenceEngine(BaseInferenceEngine):
                 z_kl=z_kl,
                 tf_logits_b=tf_logits_b,
                 tf_prob_b=tf_prob_b,
-                eff_L_w=eff_L_w,
+                candidate_windows=candidate_windows,
+                z_by_w=z_by_w,
+                raw_by_w=raw_by_w,
                 eff_min_seg=eff_min_seg,
                 eff_min_seg_global=eff_min_seg_global,
-                is_unlinked_random=is_unlinked_random,
             )
             s6_meta["items_processed"] = max(1, len(raw_peaks))
-            if is_unlinked_random:
-                s6_meta["notes"] = (
-                    f"0 events called (unlinked random sequence guard: "
-                    f"max pairwise identity {max_pairwise_id * 100:.1f}% < 45%)"
-                )
-            else:
-                s6_meta["notes"] = (
-                    f"{len(raw_peaks)} raw peak(s) → {len(events)} consolidated event(s) "
-                    f"(merge_radius={config.merge_radius_bp} bp)"
-                )
+            s6_meta["notes"] = (
+                f"{len(raw_peaks)} raw peak(s) → {len(events)} consolidated event(s) "
+                f"(merge_radius={config.merge_radius_bp} bp)"
+            )
 
         timings = recorder.finalize()
         self.timing_store.record(timings)
@@ -842,13 +864,30 @@ class GTTransformerInferenceEngine(BaseInferenceEngine):
             active_tolerance_bp=config.eval_tolerance_bp,
             is_known_control=is_known_control or (has_known_gt and len(gt_items) == 0),
         )
-        if is_unlinked_random:
+        if max_pairwise_id < 0.45:
             diagnostics.summary_notes.append(
-                f"Non-biological unlinked sequence detected (max pairwise identity {max_pairwise_id * 100:.1f}% < 45%). "
-                "Zero recombination events called."
+                f"Low sequence identity (max pairwise identity {max_pairwise_id * 100:.1f}% < 45%). "
+                "Alignment exhibits high divergence; review signal attribution."
+            )
+
+        warnings_list: list[str] = []
+        if M_tx < 314:
+            warnings_list.append(
+                f"Alignment length ({M_tx} transformed cols) is shorter than model window (W=314); "
+                "transformer inference operated with zero-padding; local heuristic prioritized."
+            )
+        if any(ev.signal_attribution == "flank_kl_heuristic_only" for ev in events):
+            warnings_list.append(
+                "One or more predicted events rely solely on local flanking KL heuristic "
+                "(negative or subthreshold transformer logit)."
+            )
+        if max_pairwise_id < 0.45:
+            warnings_list.append(
+                f"Low sequence identity ({max_pairwise_id * 100:.1f}% < 45%): alignment indicates high divergence or unlinked composition."
             )
 
         return InferenceResponse(
+            warnings=warnings_list,
             engine_mode="live",
             model_param_count=n_model_params,
             config=config,
@@ -883,35 +922,39 @@ class GTTransformerInferenceEngine(BaseInferenceEngine):
         z_kl: np.ndarray,
         tf_logits_b: np.ndarray,
         tf_prob_b: np.ndarray,
-        eff_L_w: int,
+        candidate_windows: list[int],
+        z_by_w: dict[int, np.ndarray],
+        raw_by_w: dict[int, np.ndarray],
         eff_min_seg: int,
         eff_min_seg_global: int,
-        is_unlinked_random: bool = False,
     ) -> tuple[list[ConsolidatedEvent], list[RawPeakCall], GenomeTrackProfile]:
         """Pick peaks, run Level-2/3 switch attribution, consolidate via report.consolidate_peaks."""
         M_tx, S = haplo.shape
+        gate_linkage = np.clip((z_kl - 2.5) / 2.5, 0.0, 1.0)
         hybrid_profile = np.maximum(z_kl, 0.0) + np.where(
             tf_logits_b > 0.5, 7.0 * (tf_logits_b - 0.5), 0.0
-        )
-
-        if is_unlinked_random:
-            track_profile = self._build_track_profile(
-                maps=maps,
-                kept=kept,
-                L=L,
-                z_kl=z_kl,
-                tf_logits_b=tf_logits_b,
-                tf_prob_b=tf_prob_b,
-                hybrid_profile=hybrid_profile,
-                threshold_z=config.z_thresh,
-                threshold_tf_logit=config.tf_logit_thresh,
-            )
-            return [], [], track_profile
+        ) * gate_linkage
 
         # Pick candidate peaks depending on scoring mode
         peak_sources: dict[int, str] = {}
         if config.scoring_mode == "flank_kl":
-            kl_peaks = H.pick_peaks(z_kl, config.z_thresh, radius=20, max_peaks=64)
+            kl_peaks_raw = H.pick_peaks(z_kl, config.z_thresh, radius=15, max_peaks=64)
+            refined_kl_peaks = []
+            for p in kl_peaks_raw:
+                p_int = int(p)
+                lo = max(eff_min_seg, p_int - 8)
+                hi = min(M_tx - eff_min_seg, p_int + 8)
+                sub_idx = np.arange(lo, hi + 1)
+                best_w = candidate_windows[0]
+                best_z = -1.0
+                for w in candidate_windows:
+                    max_z_w = float(np.max(z_by_w[w][sub_idx]))
+                    if max_z_w > best_z:
+                        best_z = max_z_w
+                        best_w = w
+                best_b = int(sub_idx[np.argmax(raw_by_w[best_w][sub_idx])])
+                refined_kl_peaks.append(best_b)
+            kl_peaks = sorted(list(set(refined_kl_peaks)))
             for b in kl_peaks:
                 peak_sources[int(b)] = "flank_kl"
             ordered_peaks = kl_peaks
@@ -930,20 +973,36 @@ class GTTransformerInferenceEngine(BaseInferenceEngine):
             pick_by = "score"
         else:
             # hybrid_flank: combine calibrated flank_kl peaks + non-overlapping confirmed TF peaks
-            kl_peaks = H.pick_peaks(z_kl, config.z_thresh, radius=20, max_peaks=64)
+            kl_peaks_raw = H.pick_peaks(z_kl, config.z_thresh, radius=15, max_peaks=64)
+            refined_kl_peaks = []
+            for p in kl_peaks_raw:
+                p_int = int(p)
+                lo = max(eff_min_seg, p_int - 8)
+                hi = min(M_tx - eff_min_seg, p_int + 8)
+                sub_idx = np.arange(lo, hi + 1)
+                best_w = candidate_windows[0]
+                best_z = -1.0
+                for w in candidate_windows:
+                    max_z_w = float(np.max(z_by_w[w][sub_idx]))
+                    if max_z_w > best_z:
+                        best_z = max_z_w
+                        best_w = w
+                best_b = int(sub_idx[np.argmax(raw_by_w[best_w][sub_idx])])
+                refined_kl_peaks.append(best_b)
+            kl_peaks = sorted(list(set(refined_kl_peaks)))
             tf_peaks = H.pick_peaks(tf_logits_b, config.tf_logit_thresh, radius=20, max_peaks=64)
             for b in kl_peaks:
                 peak_sources[int(b)] = "flank_kl"
             merged_peaks = list(kl_peaks)
             for b_tf in tf_peaks:
-                if all(abs(int(b_tf) - int(b_k)) > 20 for b_k in merged_peaks):
+                near_kl = [k for k in kl_peaks if abs(int(k) - int(b_tf)) <= 20]
+                if near_kl:
+                    near_k = min(near_kl, key=lambda k: abs(int(k) - int(b_tf)))
+                    peak_sources[int(near_k)] = "hybrid"
+                elif all(abs(int(b_tf) - int(b_m)) > 20 for b_m in merged_peaks):
                     if len(merged_peaks) < 64:
                         merged_peaks.append(int(b_tf))
                         peak_sources[int(b_tf)] = "transformer"
-                else:
-                    # Mark nearby KL peak as TF-corroborated
-                    near_k = min(kl_peaks, key=lambda k: abs(int(k) - int(b_tf)))
-                    peak_sources[int(near_k)] = "hybrid"
             ordered_peaks = sorted(merged_peaks)
             pick_by = "prod"
 
@@ -964,28 +1023,126 @@ class GTTransformerInferenceEngine(BaseInferenceEngine):
                     member_frac=0.5,
                     top_parents=5,
                 )
-                min_sw = 0.0
+                dyn_min_sw = 0.0
             else:
-                detail = H.flank_soft_switch_detail(
-                    haplo,
-                    b_int,
-                    L_w=eff_L_w,
-                    beta=config.beta,
-                    min_seg=eff_min_seg,
-                    kind="kl",
-                    top_members=20,
-                    member_frac=0.5,
-                    top_parents=5,
-                )
-                min_sw = 1.0
-                if src == "transformer" and config.scoring_mode == "hybrid_flank":
-                    # Transformer-only peaks without matching KL peak require strict corroboration:
-                    # elevated logit >= 1.0, local KL response >= 1.5, and primary switch evidence >= 1.0
-                    if tf_logits_b[b_int] < 1.0 or z_kl[b_int] < 1.5:
-                        continue
+                best_detail = []
+                best_sw = 0.0
+                best_w_used = candidate_windows[0] if candidate_windows else eff_L_w
+                for w in candidate_windows:
+                    dt = H.flank_soft_switch_detail(
+                        haplo,
+                        b_int,
+                        L_w=w,
+                        beta=config.beta,
+                        min_seg=eff_min_seg,
+                        kind="kl",
+                        top_members=20,
+                        member_frac=0.5,
+                        top_parents=5,
+                    )
+                    if dt and dt[0]["switch"] > best_sw:
+                        best_sw = dt[0]["switch"]
+                        best_detail = dt
+                        best_w_used = w
 
-            if min_sw > 0.0 and (not detail or detail[0]["switch"] < min_sw):
-                continue
+                detail = best_detail
+                if not detail:
+                    continue
+
+                z_val = float(z_kl[b_int])
+                tf_peak = float(tf_logits_b[b_int])
+                lo_tf = max(0, b_int - 20)
+                hi_tf = min(M_tx + 1, b_int + 21)
+                local_max_tf = float(np.max(tf_logits_b[lo_tf:hi_tf]))
+                w_eff = min(best_w_used, b_int, M_tx - b_int)
+                b_orig = int(P.unshrink(P.normalise_boundary(b_int, maps), maps, L))
+
+                # Distinct parent check: at least one recombinant candidate must switch parents
+                distinct_parent_recombs = [r for r in detail if int(r["parent_left"]) != int(r["parent_right"])]
+                if not distinct_parent_recombs and src != "transformer":
+                    continue
+
+                # Compute multi-site contiguous tract evidence for top distinct recombinant candidate
+                n_tract_support = 0
+                min_side_support = 0
+                if distinct_parent_recombs:
+                    r_top = distinct_parent_recombs[0]
+                    r_idx = int(r_top["recombinant"])
+                    pL = int(r_top["parent_left"])
+                    pR = int(r_top["parent_right"])
+                    w_chk = min(w_eff, 50)
+                    if w_chk > 0:
+                        left_H = haplo[max(0, b_int - w_chk) : b_int]
+                        left_diff = (left_H[:, pL] != left_H[:, pR])
+                        n_left_pL = int(np.sum((left_H[:, r_idx] == left_H[:, pL]) & left_diff))
+                        right_H = haplo[b_int : min(M_tx, b_int + w_chk)]
+                        right_diff = (right_H[:, pL] != right_H[:, pR])
+                        n_right_pR = int(np.sum((right_H[:, r_idx] == right_H[:, pR]) & right_diff))
+                        n_tract_support = n_left_pL + n_right_pR
+                        min_side_support = min(n_left_pL, n_right_pR)
+
+                # Calibrated soft-switch evidence thresholding for orphan donors:
+                # min_sw = 0.35 for z >= 15.0, 0.50 for z >= 10.0, 0.70 for z >= 8.0, 1.0 otherwise.
+                if z_val >= 15.0:
+                    dyn_min_sw = 0.35
+                elif z_val >= 10.0:
+                    dyn_min_sw = 0.50
+                elif z_val >= 8.0:
+                    dyn_min_sw = 0.70
+                else:
+                    dyn_min_sw = 1.0
+
+                if config.scoring_mode == "hybrid_flank":
+                    if src == "transformer":
+                        # Transformer-only peaks without matching KL peak require spatial linkage:
+                        # elevated logit >= 1.0, corroborated linkage z >= 5.0, and primary switch evidence >= 1.0
+                        if tf_logits_b[b_int] < 1.0 or z_kl[b_int] < 5.0 or best_sw < 1.0:
+                            continue
+                    else:
+                        # Negative logit veto:
+                        # If Transformer assigns tf_peak <= -1.0 or local_max_tf <= 0.0,
+                        # reject unless corroborated by contiguous multi-site tract evidence (>= 3 supporting sites, min side >= 1, best_sw >= 1.5).
+                        if tf_peak <= -1.0 or local_max_tf <= 0.0:
+                            has_tract_corroboration = (
+                                len(distinct_parent_recombs) > 0
+                                and n_tract_support >= 3
+                                and min_side_support >= 1
+                                and best_sw >= 1.5
+                            )
+                            if not has_tract_corroboration:
+                                continue
+
+                        # Short / low-polymorphism alignments (M_tx < 314):
+                        # If tf_peak < 0.0 or local_max_tf < config.tf_logit_thresh, require z >= 10.5 and best_sw >= 2.0.
+                        if M_tx < 314:
+                            if tf_peak < 0.0 or local_max_tf < config.tf_logit_thresh:
+                                if z_val < 10.5 or best_sw < 2.0:
+                                    continue
+                        else:
+                            # Marginal KL peaks (z < 8.0) on full-length alignments:
+                            # Require local transformer logit >= config.tf_logit_thresh or best_sw >= 1.0.
+                            if z_val < 8.0:
+                                if local_max_tf < config.tf_logit_thresh and best_sw < 1.0:
+                                    continue
+
+                        # Truncated flanking windows (w_eff < 48 or b_orig < 50 or b_orig > L - 50):
+                        # Require best_sw >= 1.5 or local_max_tf >= 0.5.
+                        if w_eff < 48 or b_orig < 50 or b_orig > (L - 50):
+                            if best_sw < 1.5 and local_max_tf < 0.5:
+                                continue
+
+                elif config.scoring_mode == "flank_kl":
+                    # Truncated flanking windows and short alignments under flank_kl mode
+                    if w_eff < 48 or b_orig < 50 or b_orig > (L - 50):
+                        if best_sw < 1.5:
+                            continue
+                    if M_tx < 314:
+                        if z_val < 10.5 or best_sw < 2.0:
+                            continue
+
+                if best_sw < dyn_min_sw:
+                    continue
+
             if not detail:
                 continue
 
@@ -1089,6 +1246,39 @@ class GTTransformerInferenceEngine(BaseInferenceEngine):
                     )
                 )
 
+            # Signal attribution & diagnostic notes (PROJECT.md interface contract)
+            src = p_meta.get("source", config.scoring_mode)
+            z_val = float(p_meta["z_kl"])
+            tf_log = float(p_meta["tf_logit"])
+
+            if config.scoring_mode == "standalone_tf" or src == "transformer":
+                if z_val >= config.z_thresh:
+                    sig_attr = "transformer_corroborated"
+                    attr_note = f"Transformer peak corroborated by flanking KL (logit={tf_log:.2f}, z={z_val:.2f})"
+                else:
+                    sig_attr = "standalone_tf"
+                    attr_note = f"Transformer prediction without flanking KL peak (logit={tf_log:.2f})"
+            elif config.scoring_mode == "flank_kl" or src == "flank_kl" or src == "hybrid":
+                if tf_log >= config.tf_logit_thresh and M_tx >= 314:
+                    if src == "hybrid":
+                        sig_attr = "hybrid_flank"
+                        attr_note = f"Hybrid prediction combining flanking KL (z={z_val:.2f}) and Transformer (logit={tf_log:.2f})"
+                    else:
+                        sig_attr = "transformer_corroborated"
+                        attr_note = f"Flanking KL peak corroborated by Transformer (z={z_val:.2f}, logit={tf_log:.2f})"
+                elif M_tx < 314:
+                    sig_attr = "flank_kl_heuristic_only"
+                    attr_note = f"Prediction relies solely on local flanking KL heuristic (alignment M_tx={M_tx} < 314 window)"
+                elif tf_log < 0.0:
+                    sig_attr = "flank_kl_heuristic_only"
+                    attr_note = f"Prediction relies solely on local flanking KL heuristic (transformer logit={tf_log:.2f} < 0.0)"
+                else:
+                    sig_attr = "flank_kl_heuristic_only"
+                    attr_note = f"Flanking KL peak (z={z_val:.2f}) with subthreshold transformer response (logit={tf_log:.2f})"
+            else:
+                sig_attr = "hybrid_flank"
+                attr_note = f"Hybrid flank detection (z={z_val:.2f}, logit={tf_log:.2f})"
+
             consolidated_events.append(
                 ConsolidatedEvent(
                     event_id=int(ev["event_id"]),
@@ -1102,6 +1292,8 @@ class GTTransformerInferenceEngine(BaseInferenceEngine):
                     tf_prob=round(float(p_meta["tf_prob"]), 4),
                     hybrid_score=round(float(p_meta["hybrid"]), 4),
                     boundary_tx=b_tx,
+                    signal_attribution=sig_attr,
+                    attribution_note=attr_note,
                     n_switch_recombinants=len(recombs_out),
                     recombinant_sequences=[r.seq_idx for r in recombs_out],
                     recombinants=recombs_out,

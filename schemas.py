@@ -146,6 +146,9 @@ class ConsolidatedEvent(BaseModel):
     n_switch_recombinants: int
     recombinant_sequences: list[int] = Field(default_factory=list)
     recombinants: list[RecombinantCall] = Field(default_factory=list)
+    # Signal attribution & diagnostic honesty (PROJECT.md contract)
+    signal_attribution: str = "hybrid_flank"
+    attribution_note: Optional[str] = None
     # Diagnostic classification when ground truth is present
     match_status: Literal["TP", "FP", "UNLABELLED"] = "UNLABELLED"
     matched_gt_bp: Optional[int] = None
@@ -238,6 +241,7 @@ class AlignmentMetadata(BaseModel):
 class InferenceResponse(BaseModel):
     """Complete response returned to the web client for an inference run."""
     status: str = "ok"
+    warnings: list[str] = Field(default_factory=list)
     engine_mode: str = "live"
     model_param_count: int = 0
     config: InferenceConfig

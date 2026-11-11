@@ -6,10 +6,28 @@ __pycache__/
 venv/
 .pytest_cache/
 
+# Teamwork agent metadata & archives
+.agents/
+
+# Concurrency locks & temporary files
+*.lock
+*.tmp
+*.temp
+*.bak
+
 # Local runtime state & logs
 timing_history.json
 reviewer_annotations.json
 *.log
 
-# OS
+# Packaging & coverage
+dist/
+build/
+*.egg-info/
+.coverage
+htmlcov/
+
+# IDE & OS
+.vscode/
+.idea/
 .DS_Store
