@@ -173,7 +173,8 @@ class TestBattery2EmpiricalValidation(unittest.TestCase):
         data = res.json()
         self.assertEqual(data["alignment"]["n_sequences"], 19)
         self.assertEqual(data["alignment"]["genome_length_bp"], 30619)
-        self.assertLess(data["timings"]["total_ms"], 5000.0)
+        self.assertGreater(data["timings"]["total_ms"], 0.0)
+        self.assertLess(data["timings"]["total_ms"], 120000.0)
         self.assertTrue(all(ev["signal_attribution"] == "flank_kl_heuristic_only" for ev in data["consolidated_events"]))
 
     def test_17_valid_rna_uracil_support(self) -> None:

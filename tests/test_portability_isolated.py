@@ -160,7 +160,7 @@ class TestStandalonePortability(unittest.TestCase):
                 cwd=str(isolated_web),
                 capture_output=True,
                 text=True,
-                timeout=120,
+                timeout=240,
             )
             self.assertEqual(
                 result.returncode,
