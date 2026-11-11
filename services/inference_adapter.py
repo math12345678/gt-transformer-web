@@ -777,7 +777,8 @@ class GTTransformerInferenceEngine(BaseInferenceEngine):
                     min_seg=eff_min_seg,
                     power=1.0,
                     rng=rng,
-                    n_perm=2,
+                    n_perm=3,
+                    origin=origin,
                 )
             else:
                 z_kl = np.zeros(M_tx + 1, dtype=np.float64)
