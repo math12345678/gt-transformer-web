@@ -72,6 +72,10 @@
 
   function bindUIEvents() {
     el("presetSelect").addEventListener("change", () => {
+      const upOpt = el("presetSelect").querySelector('option[value="__upload__"]');
+      if (upOpt && el("presetSelect").value !== "__upload__") {
+        upOpt.remove();
+      }
       state.sourceMode = "preset";
       submitInference();
     });
@@ -105,6 +109,8 @@
     el("btnCloseOpenModal").addEventListener("click", closeUploadModal);
     el("btnCancelOpenModal").addEventListener("click", closeUploadModal);
     el("btnClearUpload").addEventListener("click", () => {
+      const upOpt = el("presetSelect").querySelector('option[value="__upload__"]');
+      if (upOpt) upOpt.remove();
       state.sourceMode = "preset";
       state.uploadedFastaFile = null;
       state.uploadedPastedFasta = "";
@@ -127,6 +133,17 @@
         alert("Choose a FASTA file or paste FASTA sequence text.");
         return;
       }
+      const uploadName = state.uploadedFastaFile
+        ? state.uploadedFastaFile.name
+        : "pasted_alignment.fasta";
+      let upOpt = el("presetSelect").querySelector('option[value="__upload__"]');
+      if (!upOpt) {
+        upOpt = document.createElement("option");
+        upOpt.value = "__upload__";
+        el("presetSelect").prepend(upOpt);
+      }
+      upOpt.textContent = `Uploaded: ${uploadName}`;
+      el("presetSelect").value = "__upload__";
       state.sourceMode = "upload";
       closeUploadModal();
       await submitInference();

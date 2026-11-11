@@ -436,6 +436,86 @@ class GTTransformerInferenceEngine(BaseInferenceEngine):
         return sorted(gt_items, key=lambda x: x["gt_bp_orig"])
 
     @staticmethod
+    def _select_informative_and_binarise(
+        seqs: list[str],
+        null_mode: str,
+        strict_min: int = 30,
+        max_non_acgt_frac: float = 0.25,
+    ) -> tuple[list[int], list[list[str]], list[int], str]:
+        """Select parsimony-informative columns and binarise for 4-gamete embedding.
+
+        Uses exact `pipeline.informative_columns` + `pipeline.binarise` whenever at
+        least `strict_min` strict ACGT informative columns exist (preserving bit-for-bit
+        parity with `pipeline.py`). For real-world FASTAs with scattered gaps or
+        ambiguities (`-`, `N`, IUPAC) that leave fewer than `strict_min` gap-free sites,
+        falls back to gap-tolerant ACGT informative columns (`<= max_non_acgt_frac`
+        non-ACGT) and treats gaps/ambiguities as missing (`'-'`) under `null_mode`.
+        """
+        kept_strict = P.informative_columns(seqs)
+        if len(kept_strict) >= strict_min:
+            cols, origin, _kind = P.binarise(seqs, kept_strict, null_mode=null_mode)
+            return kept_strict, cols, origin, "strict_acgt"
+
+        acgt = ("A", "C", "G", "T")
+        n_seq = len(seqs)
+        genome_len = len(seqs[0])
+        gap_kept: list[int] = []
+        col_major_minor: list[tuple[str, str]] = []
+
+        for c in range(genome_len):
+            counts = {b: 0 for b in acgt}
+            non_acgt = 0
+            for s in seqs:
+                ch = s[c]
+                if ch in counts:
+                    counts[ch] += 1
+                else:
+                    non_acgt += 1
+            if non_acgt / max(n_seq, 1) > max_non_acgt_frac:
+                continue
+            ordered = sorted(
+                ((b, cnt) for b, cnt in counts.items() if cnt > 0),
+                key=lambda kv: (-kv[1], kv[0]),
+            )
+            if len(ordered) < 2 or ordered[1][1] < 2:
+                continue
+            gap_kept.append(c)
+            col_major_minor.append((ordered[0][0], ordered[1][0]))
+
+        if len(gap_kept) <= len(kept_strict):
+            cols, origin, _kind = P.binarise(seqs, kept_strict, null_mode=null_mode)
+            return kept_strict, cols, origin, "strict_acgt"
+
+        if null_mode not in P.NULL_MODES:
+            raise ValueError(null_mode)
+
+        cols: list[list[str]] = []
+        origin: list[int] = []
+        for c, (major, minor) in zip(gap_kept, col_major_minor):
+            raw = [
+                "1" if s[c] == major else ("0" if s[c] == minor else "-")
+                for s in seqs
+            ]
+            has_null = "-" in raw
+            if null_mode == "drop":
+                if not has_null:
+                    cols.append(raw)
+                    origin.append(c)
+            elif null_mode == "zero":
+                cols.append(["0" if x == "-" else x for x in raw])
+                origin.append(c)
+            else:  # duplicate
+                if has_null:
+                    cols.append(["1" if x == "-" else x for x in raw])
+                    origin.append(c)
+                    cols.append(["0" if x == "-" else x for x in raw])
+                    origin.append(c)
+                else:
+                    cols.append(raw)
+                    origin.append(c)
+        return gap_kept, cols, origin, "gap_tolerant"
+
+    @staticmethod
     def _build_circular_windows_freq(haplo: np.ndarray, window_size: int) -> np.ndarray:
         """Compute (M_tx, window_size, 4) normalized gamete frequency windows.
 
@@ -514,19 +594,19 @@ class GTTransformerInferenceEngine(BaseInferenceEngine):
         L = len(seqs[0])
         if S < 4:
             raise ValueError(f"Alignment has only {S} sequences; at least 4 sequences are required.")
-        kept = P.informative_columns(seqs)
-        t_s1_ms = (time.perf_counter() - t_s1_start) * 1000.0
-        if len(kept) < 10:
-            raise ValueError(
-                f"Alignment '{ds_name}' has only {len(kept)} parsimony-informative ACGT sites "
-                "(>= 10 required after filtering gaps/ambiguities and singletons)."
-            )
 
+        t_s1_ms = (time.perf_counter() - t_s1_start) * 1000.0
         gc_pct, ambig_pct = compute_alignment_base_stats(seqs)
 
-        # Stage 2: Binarisation, coordinate maps & haplotype matrix
+        # Stage 2: Informative-site selection (strict ACGT first, gap-tolerant fallback if <30),
+        # binarisation, coordinate maps & haplotype matrix
         t_s2_start = time.perf_counter()
-        cols, origin, _kind = P.binarise(seqs, kept, null_mode=config.null_policy)
+        kept, cols, origin, info_mode = self._select_informative_and_binarise(seqs, config.null_policy)
+        if len(kept) < 10:
+            raise ValueError(
+                f"Alignment '{ds_name}' has only {len(kept)} parsimony-informative sites "
+                "(>= 10 required after filtering heavily gapped columns and singletons)."
+            )
         maps = P.build_maps(origin, L)
         M_tx = len(cols)
         if M_tx < 10:
@@ -548,28 +628,33 @@ class GTTransformerInferenceEngine(BaseInferenceEngine):
         )
 
         # Record already-measured Stages 1 & 2 cleanly via TimingRecorder
+        info_desc = (
+            "parsimony-informative ACGT sites"
+            if info_mode == "strict_acgt"
+            else "parsimony-informative sites (gap-tolerant fallback)"
+        )
         recorder._stages_raw.append(
             {
                 "stage_id": "parse_filter",
-                "stage_name": "1. FASTA Parse & Informative-Site Filter",
+                "stage_name": "1. FASTA Parse & Alignment Validation",
                 "duration_ms": round(t_s1_ms, 2),
                 "items_processed": L,
                 "items_unit": "bp",
                 "throughput": round(L / max(t_s1_ms / 1000.0, 1e-6), 1),
                 "throughput_unit": "bp/s",
-                "notes": f"{S} sequences × {L:,} bp → {len(kept):,} parsimony-informative ACGT sites",
+                "notes": f"{S} sequences × {L:,} bp parsed (GC={gc_pct}%, non-ACGT={ambig_pct}%)",
             }
         )
         recorder._stages_raw.append(
             {
                 "stage_id": "binarise_coords",
-                "stage_name": "2. Binarisation & Coordinate Bookkeeping",
+                "stage_name": "2. Informative Filter, Binarisation & Coordinate Maps",
                 "duration_ms": round(t_s2_ms, 2),
                 "items_processed": len(kept),
                 "items_unit": "cols",
                 "throughput": round(len(kept) / max(t_s2_ms / 1000.0, 1e-6), 1),
                 "throughput_unit": "cols/s",
-                "notes": f"Null policy '{config.null_policy}' → {M_tx:,} transformed columns & coordinate maps",
+                "notes": f"{len(kept):,} {info_desc} → {M_tx:,} cols ({config.null_policy})",
             }
         )
 

@@ -106,6 +106,81 @@ class TestLiveWebWorkbench(unittest.TestCase):
         self.assertEqual(res_ctrl.diagnostics.n_ground_truth_breakpoints, 0)
         self.assertEqual(len(res_ctrl.consolidated_events), 0)
 
+    def test_04_gapped_and_rna_fasta_upload(self) -> None:
+        """Verify RNA U->T normalization and gap-tolerant fallback on real/gapped FASTAs."""
+        # Part A: Synthetic gapped RNA FASTA (every column has >=1 gap + U so strict ACGT = 0)
+        rng = random.Random(123)
+        L = 2400
+        a_base = [rng.choice("ACGU") for _ in range(L)]
+        b_base = [rng.choice("ACGU") for _ in range(L)]
+
+        def make_seq(tmpl: list[str], n_mut: int, gap_idx: int) -> str:
+            arr = list(tmpl)
+            for pos in rng.sample(range(L), n_mut):
+                arr[pos] = rng.choice([x for x in "ACGU" if x != arr[pos]])
+            arr[gap_idx::6] = ["-"] * len(arr[gap_idx::6])
+            return "".join(arr)
+
+        a0 = make_seq(a_base, 25, 0)
+        a1 = make_seq(a_base, 25, 1)
+        a2 = make_seq(a_base, 25, 2)
+        b0 = make_seq(b_base, 25, 3)
+        b1 = make_seq(b_base, 25, 4)
+        b2 = make_seq(b_base, 25, 5)
+        recomb = a0[:800] + b0[800:1600] + a0[1600:]
+        rna_gapped_fasta = "\n".join(
+            [
+                f">A0\n{a0}",
+                f">A1\n{a1}",
+                f">A2\n{a2}",
+                f">B0\n{b0}",
+                f">B1\n{b1}",
+                f">B2\n{b2}",
+                f">Recomb_RNA_Gapped\n{recomb}",
+            ]
+        )
+        res_rna = web_app.engine.run_inference(
+            InferenceConfig(checkpoint="ckpt_N10000_extreme", scoring_mode="hybrid_flank"),
+            fasta_text=rna_gapped_fasta,
+            fasta_filename="rna_gapped.fasta",
+            gt_text="800, 1600",
+        )
+        self.assertGreater(res_rna.alignment.n_informative_cols, 100)
+        self.assertIn("gap-tolerant fallback", res_rna.timings.stages[1].notes)
+        self.assertGreaterEqual(len(res_rna.consolidated_events), 2)
+        m30 = next(m for m in res_rna.diagnostics.tolerance_metrics if m.tolerance_bp == 30)
+        self.assertEqual(m30.tp, 2)
+
+        # Part B: Real OpenRDP Neisseria alignment (4 seqs, 787 bp, 62 informative sites)
+        neis_path = (
+            Path(__file__).resolve().parents[4]
+            / "tools"
+            / "openrdp"
+            / "tests"
+            / "test_neisseria.fasta"
+        )
+        if neis_path.exists():
+            res_neis = web_app.engine.run_inference(
+                InferenceConfig(checkpoint="ckpt_N10000_extreme", scoring_mode="hybrid_flank"),
+                fasta_text=neis_path.read_text(encoding="utf-8", errors="replace"),
+                fasta_filename="test_neisseria.fasta",
+            )
+            self.assertEqual(res_neis.alignment.n_sequences, 4)
+            self.assertEqual(res_neis.alignment.genome_length_bp, 787)
+            self.assertEqual(res_neis.alignment.n_informative_cols, 62)
+
+        # Part C: Sarbecovirus 5-sequence alignment has only 9 parsimony-informative sites (55 singletons)
+        # and must fail gracefully with an informative ValueError rather than faking results.
+        sarb_path = Path(__file__).resolve().parents[4] / "sarbecovirus_5_aligned.fasta"
+        if sarb_path.exists():
+            with self.assertRaises(ValueError) as ctx:
+                web_app.engine.run_inference(
+                    InferenceConfig(checkpoint="ckpt_N10000_extreme", scoring_mode="hybrid_flank"),
+                    fasta_text=sarb_path.read_text(encoding="utf-8", errors="replace"),
+                    fasta_filename="sarbecovirus_5_aligned.fasta",
+                )
+            self.assertIn("only 9 parsimony-informative sites", str(ctx.exception))
+
 
 if __name__ == "__main__":
     unittest.main()

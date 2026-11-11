@@ -34,7 +34,7 @@ def parse_fasta_text(fasta_text: str) -> tuple[list[str], list[str]]:
                 raise ValueError(
                     "Invalid FASTA format: sequence data encountered before first '>' header."
                 )
-            cleaned = re.sub(r"\s+", "", line).upper()
+            cleaned = re.sub(r"\s+", "", line).upper().replace("U", "T")
             cur.append(cleaned)
 
     if not names:
