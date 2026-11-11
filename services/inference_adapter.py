@@ -226,6 +226,37 @@ PRESET_REGISTRY: dict[str, dict[str, Any]] = {
 }
 
 
+def compute_max_pairwise_identity(seqs: list[str], max_sample_cols: int = 5000) -> float:
+    """Compute maximum pairwise sequence identity across all sequences in the alignment.
+
+    Used to detect unlinked non-biological random sequences (< 45% identity).
+    """
+    S = len(seqs)
+    if S < 2:
+        return 1.0
+    L = len(seqs[0])
+    if L == 0:
+        return 0.0
+    if L > max_sample_cols:
+        step = max(1, L // max_sample_cols)
+        sampled_seqs = [s[::step][:max_sample_cols] for s in seqs]
+        L_eff = len(sampled_seqs[0])
+    else:
+        sampled_seqs = seqs
+        L_eff = L
+
+    arr = np.array([np.frombuffer(s.encode("ascii", errors="replace"), dtype=np.uint8) for s in sampled_seqs])
+    max_id = 0.0
+    sub_S = min(S, 64)
+    for i in range(sub_S - 1):
+        matches = (arr[i : i + 1] == arr[i + 1 : sub_S]).sum(axis=1) / float(L_eff)
+        if len(matches) > 0:
+            m = float(matches.max())
+            if m > max_id:
+                max_id = m
+    return max_id
+
+
 class BaseInferenceEngine(ABC):
     """Abstract interface for recombination inference engines."""
 
@@ -597,6 +628,8 @@ class GTTransformerInferenceEngine(BaseInferenceEngine):
 
         t_s1_ms = (time.perf_counter() - t_s1_start) * 1000.0
         gc_pct, ambig_pct = compute_alignment_base_stats(seqs)
+        max_pairwise_id = compute_max_pairwise_identity(seqs)
+        is_unlinked_random = bool(max_pairwise_id < 0.45)
 
         # Stage 2: Informative-site selection (strict ACGT first, gap-tolerant fallback if <30),
         # binarisation, coordinate maps & haplotype matrix
@@ -705,8 +738,8 @@ class GTTransformerInferenceEngine(BaseInferenceEngine):
                 tf_logits_b = np.zeros(M_tx + 1, dtype=np.float64)
             tf_prob_b = 1.0 / (1.0 + np.exp(-np.clip(tf_logits_b, -10.0, 10.0)))
 
-        # Adaptive bounds for very sparse empirical alignments (e.g. M_tx < 250)
-        eff_min_seg = min(config.min_seg, max(8, M_tx // 6))
+        # Adaptive bounds: dynamically adapt down to 6 for sensitive edge breakpoint recovery
+        eff_min_seg = min(config.min_seg, max(6, int(M_tx * 0.015)))
         eff_L_w = min(config.flank_window, max(16, M_tx // 3))
         if config.scoring_mode == "global_kl":
             eff_min_seg_global = min(max(config.min_seg, 200), max(10, M_tx // 4))
@@ -742,7 +775,7 @@ class GTTransformerInferenceEngine(BaseInferenceEngine):
                     L_w=eff_L_w,
                     beta=config.beta,
                     min_seg=eff_min_seg,
-                    power=0.5,
+                    power=1.0,
                     rng=rng,
                     n_perm=2,
                 )
@@ -771,12 +804,19 @@ class GTTransformerInferenceEngine(BaseInferenceEngine):
                 eff_L_w=eff_L_w,
                 eff_min_seg=eff_min_seg,
                 eff_min_seg_global=eff_min_seg_global,
+                is_unlinked_random=is_unlinked_random,
             )
             s6_meta["items_processed"] = max(1, len(raw_peaks))
-            s6_meta["notes"] = (
-                f"{len(raw_peaks)} raw peak(s) → {len(events)} consolidated event(s) "
-                f"(merge_radius={config.merge_radius_bp} bp)"
-            )
+            if is_unlinked_random:
+                s6_meta["notes"] = (
+                    f"0 events called (unlinked random sequence guard: "
+                    f"max pairwise identity {max_pairwise_id * 100:.1f}% < 45%)"
+                )
+            else:
+                s6_meta["notes"] = (
+                    f"{len(raw_peaks)} raw peak(s) → {len(events)} consolidated event(s) "
+                    f"(merge_radius={config.merge_radius_bp} bp)"
+                )
 
         timings = recorder.finalize()
         self.timing_store.record(timings)
@@ -801,6 +841,11 @@ class GTTransformerInferenceEngine(BaseInferenceEngine):
             active_tolerance_bp=config.eval_tolerance_bp,
             is_known_control=is_known_control or (has_known_gt and len(gt_items) == 0),
         )
+        if is_unlinked_random:
+            diagnostics.summary_notes.append(
+                f"Non-biological unlinked sequence detected (max pairwise identity {max_pairwise_id * 100:.1f}% < 45%). "
+                "Zero recombination events called."
+            )
 
         return InferenceResponse(
             engine_mode="live",
@@ -840,12 +885,27 @@ class GTTransformerInferenceEngine(BaseInferenceEngine):
         eff_L_w: int,
         eff_min_seg: int,
         eff_min_seg_global: int,
+        is_unlinked_random: bool = False,
     ) -> tuple[list[ConsolidatedEvent], list[RawPeakCall], GenomeTrackProfile]:
         """Pick peaks, run Level-2/3 switch attribution, consolidate via report.consolidate_peaks."""
         M_tx, S = haplo.shape
         hybrid_profile = np.maximum(z_kl, 0.0) + np.where(
             tf_logits_b > 0.5, 7.0 * (tf_logits_b - 0.5), 0.0
         )
+
+        if is_unlinked_random:
+            track_profile = self._build_track_profile(
+                maps=maps,
+                kept=kept,
+                L=L,
+                z_kl=z_kl,
+                tf_logits_b=tf_logits_b,
+                tf_prob_b=tf_prob_b,
+                hybrid_profile=hybrid_profile,
+                threshold_z=config.z_thresh,
+                threshold_tf_logit=config.tf_logit_thresh,
+            )
+            return [], [], track_profile
 
         # Pick candidate peaks depending on scoring mode
         peak_sources: dict[int, str] = {}
@@ -916,7 +976,12 @@ class GTTransformerInferenceEngine(BaseInferenceEngine):
                     member_frac=0.5,
                     top_parents=5,
                 )
-                min_sw = 0.5 if src == "transformer" else 1.0
+                min_sw = 1.0
+                if src == "transformer" and config.scoring_mode == "hybrid_flank":
+                    # Transformer-only peaks without matching KL peak require strict corroboration:
+                    # elevated logit >= 1.0, local KL response >= 1.5, and primary switch evidence >= 1.0
+                    if tf_logits_b[b_int] < 1.0 or z_kl[b_int] < 1.5:
+                        continue
 
             if min_sw > 0.0 and (not detail or detail[0]["switch"] < min_sw):
                 continue
