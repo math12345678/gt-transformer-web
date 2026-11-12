@@ -1,3 +1,13 @@
+---
+title: GT-Transformer Recombination Workbench
+emoji: 🧬
+colorFrom: blue
+colorTo: indigo
+sdk: docker
+app_port: 7860
+short_description: RDP5-style recombination inference and diagnostics UI
+---
+
 # gt-transformer-web
 
 Web-accessible recombination detection and diagnostic workbench for `gt-transformer`, modeled on **RDP5** and **OpenRDP**.
