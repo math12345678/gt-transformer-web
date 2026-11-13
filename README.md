@@ -1,10 +1,10 @@
 # gt-transformer-web
 
-Web-accessible recombination detection and diagnostic workbench for `gt-transformer`, modeled on **RDP5** and **OpenRDP**.
+Web-accessible recombination detection and diagnostic workbench for `gt-transformer`.
 
-## Interface Layout (RDP5 / OpenRDP Design)
+## Interface Layout
 
-- **Top Toolbar & Informative-Site Overview Strip**: `Open` (FASTA upload + optional `.json`/`.csv`/SantaSim `.txt` ground truth), `Run`, `Options` (OpenRDP-style `.ini` parameter dialog), dataset selector, and export buttons (`Save OpenRDP TSV`, `Save Breakpoints CSV`, `Save Sequence Calls`, `Timings CSV`, `Save JSON`).
+- **Top Toolbar & Informative-Site Overview Strip**: `Open` (FASTA upload + optional `.json`/`.csv`/SantaSim `.txt` ground truth), `Run`, `Options`, dataset selector, and export buttons (`Save OpenRDP TSV`, `Save Breakpoints CSV`, `Save Sequence Calls`, `Timings CSV`, `Save JSON`).
 - **Top-Left Pane (Multiple Sequence Alignment Viewer)**: Displays actual nucleotides from the loaded FASTA with parsimony-informative sites highlighted, sequence list sidebar, coordinate jumper, and carrier/parent highlighting.
 - **Top-Right Pane (Tabbed Analysis & Diagnostics)**
   - `Overview`: Consolidated breakpoint table (`Event #`, `Method`, `BP`, `Span`, `Peaks`, `flank_kl z`, `TF logit`, `Carriers`, `Ext Parents L→R`, `Status`).
